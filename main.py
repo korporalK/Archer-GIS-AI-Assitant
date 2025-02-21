@@ -79,98 +79,120 @@ def setup_environment():
 
 # Prompts
 PLANNER_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a helpful GIS assistant. Your task is to create a plan to solve a GIS problem, using ONLY the provided tools.
-            You MUST output a JSON array of steps. Each step MUST have:
-              - tool: The exact name of one of the available tools (no other functions allowed)
-              - input: A dictionary of input parameters exactly matching the tool's required parameters
-              - description: Why you are using this tool in this step
-            
-            DO NOT include any markdown formatting or code blocks. Output ONLY the JSON array.
+    ("system", """You are a helpful GIS planning assistant. Your task is to develop a step-by-step plan to solve a GIS problem using ONLY the provided tools.
+You must output a JSON array of steps. Each step must be an object with:
+  - tool: The exact name of one of the available tools (no other functions allowed).
+  - input: A dictionary of input parameters exactly matching the tool's required parameters.
+  - description: A clear explanation of why this tool is used in this step.
 
-            Example format:
-            [
-                {{
-                    "tool": "get_workspace_inventory",
-                    "input": {{"workspace": "D:\masters_project\ArcGIS_AI\Default.gdb"}},
-                    "description": "List all contents of the current workspace"
-                }}
-            ]
-            
-            Available tools and their descriptions:
-            {tools}
-            
-            Current workspace: {workspace}
-            Current inventory: {inventory}
-            
-            DO NOT include any markdown formatting or code blocks. Output ONLY the JSON array."""),
+Important: If any tool requires selecting an attribute field or similar parameter that cannot be predetermined (for example, when processing attribute data), include a step to list or examine fields (e.g., using "list_fields") and add a placeholder or comment indicating that the correct field will be determined by the executor based on the output.
+     
+Do not include any markdown formatting or code blocks; output ONLY the JSON array.
+
+Example format:
+[
+    {{
+        "tool": "get_workspace_inventory",
+        "input": {{"workspace": "D:\\masters_project\\ArcGIS_AI\\Default.gdb"}},
+        "description": "List all contents of the current workspace."
+    }}
+]
+
+Available tools and their descriptions:
+{tools}
+
+Current workspace: {workspace}
+Current inventory: {inventory}
+
+Output ONLY the JSON array.
+"""),
     MessagesPlaceholder(variable_name="chat_history"),
     ("user", "{input}"),
     MessagesPlaceholder(variable_name="agent_scratchpad"),
 ])
 
 VERIFIER_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a GIS plan verifier. Your task is to check a plan for errors.
+    ("system", """You are a GIS plan verifier with a chain-of-thought reasoning process. Your task is to verify a GIS plan for errors with detailed internal reasoning.
+    
+Input:
+- user_request: The original GIS task.
+- plan: A JSON array of steps, where each step includes 'tool', 'input', and 'description'.
+- tool_descriptions: A list of available tools and their descriptions.
+- workspace_inventory: The current inventory of the GIS workspace.
 
-    Input:
-    - user_request: The original GIS task.
-    - plan: A JSON array of steps. Each step has `tool`, `input`, and `description`.
-    - tool_descriptions: A list of available tools and descriptions.
-    - workspace_inventory: Inventory of the current GIS workspace.
+Process:
+1. Review each step to ensure:
+   - Each 'tool' is valid and available.
+   - Each 'input' contains all required parameters according to the tool's description.
+   - The sequence of steps is logical and coherent in a GIS context.
+   - Outputs from previous steps are appropriately utilized in later steps.
+   - There are no missing steps essential to achieving the overall goal.
+   - Potential data issues (e.g., incorrect spatial reference, missing fields) are accounted for.
+   - Redundancies are minimized; for instance, avoid re-downloading data that already exists.
+   - Confirm that file formats are compatible with the intended tools.
+   - Verify that all datasets use the same spatial reference system or are properly reprojected.
+   - Ensure that all required attribute fields exist and are correctly formatted.
+   - Check for consistency in field naming conventions and units.
+   - Validate that attribute values are within expected ranges and data types (e.g., numeric, string) match tool requirements.
+   - Properly handle NoData values, ensuring they are not misinterpreted during processing.
+   - When resampling or reclassifying, ensure that the chosen method (nearest neighbor, bilinear, cubic, etc.) is suitable for the data type.
+   - Double-check that the selected tool is appropriate for the data type (vector vs. raster) and analysis goal.
+   - Ensure that the sequence of steps logically builds upon previous outputs (e.g., using field listings to inform selection criteria).
+   - If any step requires an attribute field (or similar parameter) that cannot be predetermined, verify that the plan includes a step to list or examine fields and a clear placeholder indicating that the executor will determine the appropriate field from the list.
 
-    Output:
-    Return a SINGLE STRING.
-    - If the plan is valid, ONLY return the string "valid".
-    - If the plan is invalid, return a string describing the error.  Do NOT return JSON.
+2. As you analyze the plan, produce a detailed chain-of-thought that captures your reasoning process.
+3. After completing your reasoning, output a JSON object with exactly two keys:
+   - "detailed_thought": Containing the full chain-of-thought reasoning.
+   - "validity": A final verdict that is either "valid" if the plan is acceptable, or an error message explaining what is wrong. This key must appear last in the JSON object.
 
-    Checks:
-    1. Each 'tool' in the plan must be one of the available tools.
-    2. Each 'input' must contain all *required* parameters for the specified tool.
-    3. Basic type checking (string, number) for input parameters based on tool descriptions.
-    4. Does the order of steps make sense in a GIS context?
-    5. Are the outputs of previous steps correctly used as inputs for subsequent steps?
-    6. Are there any missing steps that are necessary to achieve the overall goal?
-    7. Consider potential data issues (e.g., incorrect spatial reference, data existence).
-    8. Avoid redundancy, in context of data as well as geoprocessing steps. 
-    9. If data already exists then don't download it again.
-    10. Fields for selection exist? If not get the fields first.
-
-    Examples:
-    Valid plan: "valid"
-    Invalid plan: "Step 1: Missing 'buffer_unit'"
-    """),
+Do not output any markdown or additional formatting; output only the JSON object.
+"""),
     ("user", """
-     Original User Request:
-     {request}
+Original User Request:
+{request}
 
-     Tool Descriptions:
-     {tools}
+Tool Descriptions:
+{tools}
 
-     Plan:
-     {plan}
+Plan:
+{plan}
 
-     Workspace Inventory:
-     {inventory}
+Workspace Inventory:
+{inventory}
 
-     Output:
-     Return a SINGLE STRING.
-    - If the plan is valid, ONLY return the string "valid".
-    - If the plan is invalid, return a string describing the error.  Do NOT return JSON.
-     """)
+Output:
+Return a JSON object with exactly two keys:
+- "detailed_thought": Your complete chain-of-thought reasoning.
+- "validity": "valid" if the plan is correct, and "invalid" if the plan is incorrect.
+""")
 ])
 
 EXECUTOR_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a GIS task executor. Your role is to execute the provided plan using the available tools.
-Each step in the plan contains:
-- tool: The name of the tool to execute
-- input: The parameters for the tool
-- description: Why this step is needed
+    ("system", """You are a GIS task executor. Your role is to execute the provided plan step-by-step using the available tools.
+Each step in the plan is an object with:
+- tool: The name of the tool to execute.
+- input: The parameters required for that tool.
+- description: A brief explanation of why this step is necessary.
 
-Execute each step and report the results. If a step fails, provide the error message.
-Use the execution history to understand what steps have been completed and their results."""),
+Process:
+1. Execute each step sequentially.
+2. For each step, provide a clear and detailed report of:
+   - The tool executed.
+   - The input parameters used.
+   - The outcome of the execution or any error encountered.
+3. Reference any results from previous steps if they are used as inputs in later steps.
+4. If a placeholder was provided for selecting an attribute field (because the correct field was unknown at planning time), use the output from the corresponding "list_fields" step to determine and substitute the appropriate field. Clearly document the chosen field and the reasoning behind it.
+5. After executing all steps, provide a final summary indicating the overall success or failure of the plan execution.
+
+Output:
+Return a comprehensive plain-text report that includes:
+- A final summary with the overall status.
+"""),
     MessagesPlaceholder(variable_name="chat_history"),
     ("user", "Here is the plan to execute: {input}"),
     MessagesPlaceholder(variable_name="agent_scratchpad"),
 ])
+
 
 class GISAgent:
     def __init__(self, api_key: str, workspace: str):
@@ -324,7 +346,7 @@ class GISAgent:
             print(f"Error in plan extraction: {str(e)}")
             raise ValueError(f"Error extracting plan: {str(e)}")
 
-    def process_request(self, user_input: str, max_iterations: int = 5) -> str:
+    def process_request(self, user_input: str, max_iterations: int = 3) -> str:
         """Process a user request through the three-agent pipeline."""
         try:
             print("\n=== Starting Request Processing ===")
@@ -347,17 +369,13 @@ class GISAgent:
                             else f"{user_input}\nPrevious verification feedback: {verification_result}",
                     "workspace": self.workspace,
                     "inventory": inventory,
-                    "tools": self.tool_descriptions  # Using the tool descriptions
+                    "tools": self.tool_descriptions
                 }
-                print("Planning Input:")
-                print(f"- Input: {planning_input['input']}")
-                print(f"- Workspace: {planning_input['workspace']}")
-                print(f"- Tools available: {len(self.tool_descriptions)}")
+                print(f"Planning Input: {json.dumps(planning_input, indent=2)}")
                 
                 try:
                     plan_result = self.planner.invoke(planning_input)
-                    print("Raw Planner Output:")
-                    print(plan_result['output'])  # Just print the output string
+                    print(f"Raw Planner Output: {plan_result['output']}")
                     plan = self._extract_plan(plan_result)
                     print(f"Extracted Plan: {plan}")
                 except ValueError as e:
@@ -379,20 +397,29 @@ class GISAgent:
                 verification_result = self.verifier.invoke(
                     VERIFIER_PROMPT.format_prompt(**verification_input)
                 ).content
-                print(f"Verification Result: {verification_result}")
                 
-                time.sleep(5)
+                # Clean the verification result
+                verification_result = verification_result.replace("```json", "").replace("```", "").strip()
 
-                if verification_result.lower() == "valid":
-                    print("Plan verified as valid!")
-                    break
-                
-                current_iteration += 1
-                if current_iteration == max_iterations:
-                    print(f"Failed after {max_iterations} attempts")
-                    return f"Failed to create a valid plan after {max_iterations} attempts. Last verification error: {verification_result}"
+                # Process verification result as JSON
+                try:
+                    verification_json = json.loads(verification_result)
+                    detailed_thought = verification_json.get("detailed_thought", "")
+                    validity = verification_json.get("validity", "invalid")
+                    print(f"Verification Detailed Thought: {detailed_thought}")
+                    print(f"Verification Validity: {validity}")
+                    
+                    if validity.lower() == "valid":
+                        print("Plan verified as valid!")
+                        break
+                    else:
+                        print(f"Verification invalid: {detailed_thought}")
+                        return f"Verification failed: {detailed_thought}"
+                except json.JSONDecodeError as e:
+                    print(f"Verification JSON decode error: {str(e)}")
+                    return f"Invalid verification output format: {str(e)}"
             
-            # Execution Phase with error handling
+            # Execution Phase
             print("\n3. EXECUTION PHASE")
             print(f"Executing Plan: {plan}")
             

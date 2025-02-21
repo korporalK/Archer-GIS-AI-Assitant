@@ -736,7 +736,7 @@ def get_workspace_inventory(workspace: str = None) -> str:
                 } for table in (tables or [])
             ]
         }
-        return json.dumps(inventory)
+        return json.dumps(inventory, indent=2)
     except arcpy.ExecuteError:
         return f"ArcGIS Error: {arcpy.GetMessages(2)}"
 
