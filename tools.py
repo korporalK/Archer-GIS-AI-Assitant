@@ -706,6 +706,7 @@ def get_workspace_inventory(workspace: str = None) -> str:
     Raises:
         arcpy.ExecuteError: If there's an error accessing the workspace or listing contents
     """
+
     try:
         if workspace:
             arcpy.env.workspace = workspace

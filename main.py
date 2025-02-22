@@ -183,10 +183,24 @@ Each step in the plan is an object with:
 - input: The parameters required for that tool.
 - description: A brief explanation of why this step is necessary.
 
+Example format:
+[
+    {{
+        "tool": "buffer_features",
+        "input": {{
+            "input_features": "input.shp",
+            "output_features": "buffered_output.shp",
+            "buffer_distance": 100,
+            "buffer_unit": "Meters"
+            }},
+        "description": "Buffer the input features by 100 meters."
+    }}
+]     
+
 Process:
 1. Execute each step sequentially.
 2. Reference any results from previous steps if they are used as inputs in later steps.
-3. If a placeholder was provided for selecting an attribute field (because the correct field was unknown at planning time), use the output from the corresponding "list_fields" step to determine and substitute the appropriate field. Clearly document the chosen field and the reasoning behind it.
+3. If a placeholder was provided for selecting an attribute field (because the correct field was unknown at planning time), use the output from the corresponding "list_fields" step to determine and substitute the appropriate field.
 4. After executing all steps, provide a final summary indicating the overall success or failure of the plan execution.
 
 Output:
@@ -289,14 +303,14 @@ class GISAgent:
 
     
     def _create_verifier(self):
-        return ChatGoogleGenerativeAI(model=self.model_small,
+        return ChatGoogleGenerativeAI(model=self.model,
                                     google_api_key=self.api_key,
                                     temperature=0.0,
                                     timeout=60)
     
     def _create_executor(self):
         llm = ChatGoogleGenerativeAI(
-            model=self.model,
+            model=self.model_small,
             google_api_key=self.api_key,
             temperature=0.0,
             max_retries=3,
@@ -450,7 +464,17 @@ class GISAgent:
             # Execution Phase
             print("\n3. EXECUTION PHASE")
             print(f"Executing Plan: {plan}")
+            print(f"Plan JSON sent to Executor: {plan}")
             
+
+            # Format the EXECUTOR_PROMPT to see the full input
+            executor_input = EXECUTOR_PROMPT.format_prompt(input=plan, agent_scratchpad=[], chat_history=[]) # Assuming no chat history for executor
+            full_executor_input_content = executor_input.to_string() # Get the full formatted prompt as a string
+            print("\n--- Full Input to Executor Agent (Prompt + Plan) ---")
+            print(full_executor_input_content)
+            print("\n--- End of Full Input to Executor Agent ---")
+
+
             try:
                 execution_result = self.executor.invoke({
                     "input": plan
@@ -460,18 +484,18 @@ class GISAgent:
             except Exception as exec_error:
                 print(f"Execution error: {str(exec_error)}")
                 # Try to execute the plan directly without the agent
-                try:
-                    results = []
-                    parsed_plan = json.loads(plan)
-                    for step in parsed_plan:
-                        tool_name = step["tool"]
-                        tool = next((t for t in self.tools if t.name == tool_name), None)
-                        if tool:
-                            result = tool.invoke(step["input"])
-                            results.append(f"Step '{tool_name}' result: {result}")
-                    return "\n\n".join(results)
-                except Exception as direct_error:
-                    return f"Execution failed: {str(direct_error)}"
+                # try:
+                #     results = []
+                #     parsed_plan = json.loads(plan)
+                #     for step in parsed_plan:
+                #         tool_name = step["tool"]
+                #         tool = next((t for t in self.tools if t.name == tool_name), None)
+                #         if tool:
+                #             result = tool.invoke(step["input"])
+                #             results.append(f"Step '{tool_name}' result: {result}")
+                #     return "\n\n".join(results)
+                # except Exception as direct_error:
+                #     return f"Execution failed: {str(direct_error)}"
 
         except Exception as e:
             print(f"\nERROR: {str(e)}")
