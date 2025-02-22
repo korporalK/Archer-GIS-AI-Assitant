@@ -86,7 +86,15 @@ You must output a JSON array of steps. Each step must be an object with:
   - description: A clear explanation of why this tool is used in this step.
 
 Important: If any tool requires selecting an attribute field or similar parameter that cannot be predetermined (for example, when processing attribute data), include a step to list or examine fields (e.g., using "list_fields") and add a placeholder or comment indicating that the correct field will be determined by the executor based on the output.
-     
+
+Process:
+1. Review the user request and the current workspace inventory.
+2. Identify the necessary tools and parameters required to address the user's request.
+3. Construct a logical sequence of steps that utilize the available tools effectively.
+4. DO NOT ASSUME FIELD NAME, ALWAYS CHECK USING 'list_fields' tool and provide a placeholder like "field name to be decided by executor based on list_fields output" in the meanwhile.
+5. Ensure that each step is coherent and contributes to solving the overall GIS problem.
+
+
 Do not include any markdown formatting or code blocks; output ONLY the JSON array.
 
 Example format:
@@ -138,12 +146,13 @@ Process:
    - When resampling or reclassifying, ensure that the chosen method (nearest neighbor, bilinear, cubic, etc.) is suitable for the data type.
    - Double-check that the selected tool is appropriate for the data type (vector vs. raster) and analysis goal.
    - Ensure that the sequence of steps logically builds upon previous outputs (e.g., using field listings to inform selection criteria).
+   - DO NOT ASSUME FIELD NAME, ALWAYS CHECK USING 'list_fields' tool and provide a placeholder "field name to be decided by executor based on list_fields output" in the meanwhile.
    - If any step requires an attribute field (or similar parameter) that cannot be predetermined, verify that the plan includes a step to list or examine fields and a clear placeholder indicating that the executor will determine the appropriate field from the list.
 
 2. As you analyze the plan, produce a detailed chain-of-thought that captures your reasoning process.
 3. After completing your reasoning, output a JSON object with exactly two keys:
    - "detailed_thought": Containing the full chain-of-thought reasoning.
-   - "validity": A final verdict that is either "valid" if the plan is acceptable, or an error message explaining what is wrong. This key must appear last in the JSON object.
+   - "validity": A final verdict that is either "valid" if the plan is acceptable, or "invalid" if the plan is incorrect. This key must appear last in the JSON object.
 
 Do not output any markdown or additional formatting; output only the JSON object.
 """),
@@ -176,16 +185,12 @@ Each step in the plan is an object with:
 
 Process:
 1. Execute each step sequentially.
-2. For each step, provide a clear and detailed report of:
-   - The tool executed.
-   - The input parameters used.
-   - The outcome of the execution or any error encountered.
-3. Reference any results from previous steps if they are used as inputs in later steps.
-4. If a placeholder was provided for selecting an attribute field (because the correct field was unknown at planning time), use the output from the corresponding "list_fields" step to determine and substitute the appropriate field. Clearly document the chosen field and the reasoning behind it.
-5. After executing all steps, provide a final summary indicating the overall success or failure of the plan execution.
+2. Reference any results from previous steps if they are used as inputs in later steps.
+3. If a placeholder was provided for selecting an attribute field (because the correct field was unknown at planning time), use the output from the corresponding "list_fields" step to determine and substitute the appropriate field. Clearly document the chosen field and the reasoning behind it.
+4. After executing all steps, provide a final summary indicating the overall success or failure of the plan execution.
 
 Output:
-Return a comprehensive plain-text report that includes:
+- Should include relevant tool calls.
 - A final summary with the overall status.
 """),
     MessagesPlaceholder(variable_name="chat_history"),
@@ -199,6 +204,7 @@ class GISAgent:
         self.api_key = api_key
         self.workspace = workspace
         self.model = "gemini-2.0-pro-exp-02-05"
+        self.model_small = "gemini-2.0-flash-exp"
         
         self.tools = [
             add_field,
@@ -262,22 +268,31 @@ class GISAgent:
     def _create_planner(self):
         llm = ChatGoogleGenerativeAI(model=self.model, 
                                     google_api_key=self.api_key,
-                                    temperature=0.0)
-        agent = create_openai_tools_agent(llm, self.tools, PLANNER_PROMPT)
+                                    temperature=0.0,
+                                    timeout=60)
+        
         memory = ConversationBufferMemory(memory_key="chat_history",
                                         return_messages=True,
                                         input_key="input",
                                         output_key="output")
-        return AgentExecutor(agent=agent,
-                           tools=self.tools,
-                           verbose=True,
-                           memory=memory,
-                           handle_parsing_errors=True)
+        agent = create_openai_tools_agent(llm, self.tools, PLANNER_PROMPT)
+        
+        return AgentExecutor(
+            agent=agent,
+            tools=self.tools,
+            verbose=True,
+            memory=memory,
+            max_iterations=3,
+            early_stopping_method="generate",
+        )
+    
+
     
     def _create_verifier(self):
-        return ChatGoogleGenerativeAI(model=self.model,
+        return ChatGoogleGenerativeAI(model=self.model_small,
                                     google_api_key=self.api_key,
-                                    temperature=0.0)
+                                    temperature=0.0,
+                                    timeout=60)
     
     def _create_executor(self):
         llm = ChatGoogleGenerativeAI(
@@ -352,7 +367,7 @@ class GISAgent:
             print("\n=== Starting Request Processing ===")
             print(f"User Input: {user_input}")
             
-            inventory = get_workspace_inventory(self.workspace)
+            inventory = get_workspace_inventory.invoke(self.workspace)
             print(f"\nCurrent Workspace Inventory: {inventory}")
             
             current_iteration = 0
@@ -369,7 +384,7 @@ class GISAgent:
                             else f"{user_input}\nPrevious verification feedback: {verification_result}",
                     "workspace": self.workspace,
                     "inventory": inventory,
-                    "tools": self.tool_descriptions
+                    "tools": self.tool_descriptions,
                 }
                 print(f"Planning Input: {json.dumps(planning_input, indent=2)}")
                 
@@ -382,7 +397,7 @@ class GISAgent:
                     print(f"Planning Error: {str(e)}")
                     return f"Planning failed: {str(e)}"
                 
-                time.sleep(5)  # Wait for 5 seconds before proceeding to the verification phase
+                time.sleep(10)  # Wait for 5 seconds before proceeding to the verification phase
 
                 # Verification Phase
                 print("\n2. VERIFICATION PHASE")
@@ -414,10 +429,23 @@ class GISAgent:
                         break
                     else:
                         print(f"Verification invalid: {detailed_thought}")
-                        return f"Verification failed: {detailed_thought}"
+                        # Provide feedback to the planner for the next iteration
+                        planning_input["previous_feedback"] = detailed_thought
+                        print(f"Feedback sent to planner: {detailed_thought}")
+                        current_iteration += 1  # Increment iteration for the next loop
+                        if current_iteration >= max_iterations:
+                            print("Maximum iterations reached. Planning failed.")
+                            return "Maximum iterations reached. Planning failed."
+                        
+                        time.sleep(10)
+                        
                 except json.JSONDecodeError as e:
                     print(f"Verification JSON decode error: {str(e)}")
                     return f"Invalid verification output format: {str(e)}"
+            
+            # Do not proceed to Execution Phase if the plan is invalid
+            if validity.lower() != "valid":
+                return "Plan is invalid after maximum iterations. Execution phase skipped."
             
             # Execution Phase
             print("\n3. EXECUTION PHASE")
@@ -441,7 +469,7 @@ class GISAgent:
                         if tool:
                             result = tool.invoke(step["input"])
                             results.append(f"Step '{tool_name}' result: {result}")
-                    return "\n".join(results)
+                    return "\n\n".join(results)
                 except Exception as direct_error:
                     return f"Execution failed: {str(direct_error)}"
 
@@ -501,9 +529,9 @@ class GISGUI:
         # Input box with placeholder
         self.input_box = tk.Text(
             input_frame,
-            height=1,
+            height=4,  # Initial height
             width=40,
-            wrap=tk.WORD,
+            wrap=tk.WORD,  # Ensure text wraps
             font=("Arial", 12),
             bd=0,
             highlightthickness=0
@@ -517,6 +545,7 @@ class GISGUI:
         self.input_box.bind("<FocusOut>", self.on_focus_out)
         self.input_box.bind("<Return>", self.submit_request)
         self.input_box.bind("<Shift-Return>", lambda e: self.input_box.insert(tk.INSERT, '\n'))
+        
         
         # Animated send button
         self.button_colors = ["#4CAF50", "#2196F3", "#f44336", "#FFC107"]
@@ -533,6 +562,7 @@ class GISGUI:
         )
         self.send_button.pack(side=tk.RIGHT, padx=5, pady=5)
         self.send_button.bind("<Enter>", self.animate_button)
+    
     
     def on_entry_click(self, event):
         if self.input_box.get("1.0", tk.END).strip() == "Enter your GIS request":
@@ -570,6 +600,8 @@ class GISGUI:
         try:
             while True:
                 response = self.response_queue.get_nowait()
+                if response is None:  # Check for None
+                    continue
                 self.update_response_area(response)
                 if response == "Exiting...":
                     self.root.destroy()
