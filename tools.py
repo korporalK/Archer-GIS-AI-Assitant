@@ -271,7 +271,7 @@ def calculate_field(in_table: str, field_name: str, expression: str, expression_
 
 @tool
 def select_features(input_features: str, output_features: str, where_clause: str) -> str:
-    """Selects features by attribute and saves them to a new feature class.
+    """Selects features by attribute and saves them to a new feature class. Use the field name not the alias name to make the query.
 
     Args:
         input_features: The path to the input feature class.
@@ -650,7 +650,7 @@ def dataset_exists(dataset: str) -> str:
 
 @tool
 def list_fields(dataset: str) -> str:
-    """Lists fields in a feature class or table, including alias names.
+    """Lists fields in a feature class or table, including alias names. 
 
     Args:
         dataset: The path to the feature class or table.

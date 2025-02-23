@@ -14,6 +14,10 @@ import time
 import inspect
 import arcpy
 import traceback
+import io  # Import io module
+import contextlib # Import contextlib
+import re
+
 
 # Import tools properly
 from tools import (
@@ -214,12 +218,15 @@ Output:
 
 
 class GISAgent:
-    def __init__(self, api_key: str, workspace: str):
+    def __init__(self, api_key: str, workspace: str, response_queue: queue.Queue):
         self.api_key = api_key
         self.workspace = workspace
         self.model = "gemini-2.0-pro-exp-02-05"
         self.model_small = "gemini-2.0-flash-exp"
-        
+        self.response_queue = response_queue # Store response_queue
+
+
+
         self.tools = [
             add_field,
             append_features,
@@ -335,6 +342,10 @@ class GISAgent:
             early_stopping_method="generate",
         )
     
+    def _remove_ansi_escape_codes(self, text):
+        """Removes ANSI escape codes from a string."""
+        ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
+        return ansi_escape.sub('', text)
     
     
     def _extract_plan(self, plan_result: dict) -> str:
@@ -390,9 +401,11 @@ class GISAgent:
             
             while current_iteration < max_iterations:
                 print(f"\n--- Iteration {current_iteration + 1} ---")
-                
+                self.response_queue.put(f"\n--- Iteration {current_iteration + 1} ---\n") # Send iteration info to GU
+
                 # Planning Phase
                 print("\n1. PLANNING PHASE")
+                self.response_queue.put("Planning...\n") # Send "Planning..." to GUI
                 planning_input = {
                     "input": user_input if current_iteration == 0 
                             else f"{user_input}\nPrevious verification feedback: {verification_result}",
@@ -415,6 +428,7 @@ class GISAgent:
 
                 # Verification Phase
                 print("\n2. VERIFICATION PHASE")
+                self.response_queue.put("Verifying...\n") # Send "Planning..." to GUI
                 verification_input = {
                     "plan": plan,
                     "request": user_input,
@@ -475,27 +489,42 @@ class GISAgent:
             print("\n--- End of Full Input to Executor Agent ---")
 
 
-            try:
-                execution_result = self.executor.invoke({
-                    "input": plan
-                })
-                print(f"Execution Result: {json.dumps(execution_result, indent=2)}")
-                return f"Execution completed:\n{execution_result['output']}"
-            except Exception as exec_error:
-                print(f"Execution error: {str(exec_error)}")
-                # Try to execute the plan directly without the agent
-                # try:
-                #     results = []
-                #     parsed_plan = json.loads(plan)
-                #     for step in parsed_plan:
-                #         tool_name = step["tool"]
-                #         tool = next((t for t in self.tools if t.name == tool_name), None)
-                #         if tool:
-                #             result = tool.invoke(step["input"])
-                #             results.append(f"Step '{tool_name}' result: {result}")
-                #     return "\n\n".join(results)
-                # except Exception as direct_error:
-                #     return f"Execution failed: {str(direct_error)}"
+            # Capture stdout during executor.invoke()
+            captured_output = io.StringIO()
+            with contextlib.redirect_stdout(captured_output):
+                try:
+                    execution_result = self.executor.invoke({
+                        "input": plan
+                    })
+                    executor_output = captured_output.getvalue()
+                    executor_output_cleaned = self._remove_ansi_escape_codes(executor_output) # Clean the output
+                    print(f"Execution Result (Summary): {execution_result}")
+                    self.response_queue.put(f"Executor Output:\n{executor_output_cleaned}\n") # Send cleaned output
+                    return f"Execution completed:\n{execution_result['output']}"
+                except Exception as exec_error:
+                    executor_output = captured_output.getvalue()
+                    executor_output_cleaned = self._remove_ansi_escape_codes(executor_output) # Clean even in error case
+                    print(f"Execution error: {str(exec_error)}")
+                    error_message = f"Execution failed: {str(exec_error)}"
+                    self.response_queue.put(f"Executor Output:\n{executor_output_cleaned}\nExecution error:\n{error_message}\n") # Send cleaned output
+                    return error_message
+
+
+            # except Exception as exec_error:
+            #     print(f"Execution error: {str(exec_error)}")
+            #     # Try to execute the plan directly without the agent
+            #     # try:
+            #     #     results = []
+            #     #     parsed_plan = json.loads(plan)
+            #     #     for step in parsed_plan:
+            #     #         tool_name = step["tool"]
+            #     #         tool = next((t for t in self.tools if t.name == tool_name), None)
+            #     #         if tool:
+            #     #             result = tool.invoke(step["input"])
+            #     #             results.append(f"Step '{tool_name}' result: {result}")
+            #     #     return "\n\n".join(results)
+            #     # except Exception as direct_error:
+            #     #     return f"Execution failed: {str(direct_error)}"
 
         except Exception as e:
             print(f"\nERROR: {str(e)}")
@@ -508,6 +537,7 @@ class GISGUI:
         self.gis_agent = gis_agent
         self.request_queue = queue.Queue()
         self.response_queue = queue.Queue()
+        self.gis_agent.response_queue = self.response_queue # Pass GUI's response queue to agent
         
         self.root = tk.Tk()
         self.setup_gui()
@@ -656,13 +686,16 @@ class GISGUI:
 def main():
     # Setup
     api_key, workspace = setup_environment()
-    
-    # Create GIS Agent
-    gis_agent = GISAgent(api_key, workspace)
-    
-    # Create and run GUI
+
+    # Create response queue for agent and GUI to communicate
+    response_queue = queue.Queue()
+
+    # Create GIS Agent, passing the response queue
+    gis_agent = GISAgent(api_key, workspace, response_queue)
+
+    # Create and run GUI, passing the agent
     gui = GISGUI(gis_agent)
     gui.run()
 
 if __name__ == "__main__":
-    main() 
+    main()
