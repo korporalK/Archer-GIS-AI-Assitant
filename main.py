@@ -360,11 +360,16 @@ class GISAgent:
             # Get workspace inventory
             workspace_inventory = get_workspace_inventory.invoke(self.workspace)
             
-            # Get external file inventory
+            # Get external file inventory - always scan all directories fresh
             external_files = {}
             for directory in self.settings_manager.settings["watched_directories"]:
-                scan_result = json.loads(scan_directory_for_gis_files(directory))
-                external_files[directory] = scan_result
+                try:
+                    print(f"Scanning directory: {directory}")
+                    scan_result = json.loads(scan_directory_for_gis_files(directory))
+                    external_files[directory] = scan_result
+                except Exception as e:
+                    print(f"Error scanning directory {directory}: {str(e)}")
+                    external_files[directory] = {"vector_files": [], "raster_files": []}
             
             # Cache and return the results
             self._environment_info = {
@@ -785,8 +790,11 @@ class GISGUI:
         if directory:
             self.settings_manager.add_directory(directory)
             self.load_watched_directories()
-            # Refresh environment info when adding directory
+            # Force a complete refresh of environment info when adding directory
+            self.gis_agent._environment_info = {}  # Clear the cache completely
             self.gis_agent.refresh_environment_info()
+            # Automatically scan the directories after adding a new one
+            self.scan_directories()
     
     def remove_directory(self):
         selection = self.dir_listbox.curselection()
@@ -794,8 +802,11 @@ class GISGUI:
             directory = self.dir_listbox.get(selection[0])
             self.settings_manager.remove_directory(directory)
             self.load_watched_directories()
-            # Refresh environment info when removing directory
+            # Force a complete refresh of environment info when removing directory
+            self.gis_agent._environment_info = {}  # Clear the cache completely
             self.gis_agent.refresh_environment_info()
+            # Automatically update the tree view after removing a directory
+            self.scan_directories()
     
     def load_watched_directories(self):
         self.dir_listbox.delete(0, tk.END)
@@ -805,7 +816,8 @@ class GISGUI:
     def scan_directories(self):
         self.files_tree.delete(*self.files_tree.get_children())
         
-        # Refresh environment info before scanning
+        # Force a complete refresh of environment info before scanning
+        self.gis_agent._environment_info = {}  # Clear the cache completely
         env_info = self.gis_agent.refresh_environment_info()
         
         # Use the refreshed external directories info to update the tree
