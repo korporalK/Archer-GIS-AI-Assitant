@@ -16,6 +16,7 @@ import fiona
 import rasterio
 from osgeo import gdal
 from osgeo import ogr
+import traceback
 
 
 
@@ -1330,24 +1331,39 @@ def scan_directory_for_gis_files(directory_path: str) -> str:
         }
     """
     try:
+        print(f"Scanning directory: {directory_path}")
+        if not os.path.exists(directory_path):
+            print(f"Directory does not exist: {directory_path}")
+            return json.dumps({"error": f"Directory does not exist: {directory_path}"})
+        
         # File extensions to look for
-        vector_extensions = {'.shp', '.geojson', '.gml', '.kml', '.gpkg'}
-        raster_extensions = {'.tif', '.tiff', '.img', '.dem', '.hgt', '.asc'}
+        vector_extensions = {'.shp', '.geojson', '.gml', '.kml', '.gpkg', '.json', '.zip'}
+        raster_extensions = {'.tif', '.tiff', '.img', '.dem', '.hgt', '.asc', '.jpg', '.jpeg', '.png', '.bmp'}
         
         result = {
             "vector_files": [],
             "raster_files": []
         }
         
-        for root, _, files in os.walk(directory_path):
+        # Count files for logging
+        total_files = 0
+        vector_files_found = 0
+        raster_files_found = 0
+        
+        print(f"Starting directory walk in {directory_path}")
+        for root, dirs, files in os.walk(directory_path):
+            print(f"Scanning subdirectory: {root} with {len(files)} files")
             for file in files:
+                total_files += 1
                 file_path = os.path.join(root, file)
                 ext = os.path.splitext(file)[1].lower()
                 
                 # Vector files
                 if ext in vector_extensions:
                     try:
+                        print(f"Attempting to open vector file: {file_path}")
                         with fiona.open(file_path) as src:
+                            vector_files_found += 1
                             result["vector_files"].append({
                                 "name": file,
                                 "path": file_path,
@@ -1356,13 +1372,16 @@ def scan_directory_for_gis_files(directory_path: str) -> str:
                                 "layer_count": len(src),
                                 "crs": str(src.crs)
                             })
-                    except Exception:
-                        pass
+                            print(f"Successfully processed vector file: {file_path}")
+                    except Exception as e:
+                        print(f"Error processing vector file {file_path}: {str(e)}")
                 
                 # Raster files
                 elif ext in raster_extensions:
                     try:
+                        print(f"Attempting to open raster file: {file_path}")
                         with rasterio.open(file_path) as src:
+                            raster_files_found += 1
                             result["raster_files"].append({
                                 "name": file,
                                 "path": file_path,
@@ -1371,12 +1390,21 @@ def scan_directory_for_gis_files(directory_path: str) -> str:
                                 "bands": src.count,
                                 "crs": str(src.crs)
                             })
-                    except Exception:
-                        pass
+                            print(f"Successfully processed raster file: {file_path}")
+                    except Exception as e:
+                        print(f"Error processing raster file {file_path}: {str(e)}")
+        
+        print(f"Scan complete for {directory_path}:")
+        print(f"  Total files scanned: {total_files}")
+        print(f"  Vector files found: {vector_files_found}")
+        print(f"  Raster files found: {raster_files_found}")
         
         return json.dumps(result, indent=2)
     except Exception as e:
-        return f"Error scanning directory: {str(e)}"
+        error_msg = f"Error scanning directory {directory_path}: {str(e)}"
+        print(error_msg)
+        traceback.print_exc()  # Print the full traceback for debugging
+        return json.dumps({"error": error_msg})
 
 # Add more tools following the same pattern... 
 
