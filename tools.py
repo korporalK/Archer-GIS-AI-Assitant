@@ -11,6 +11,12 @@ import aiofiles
 from datetime import datetime
 import requests
 from urllib.parse import urlparse
+from pathlib import Path
+import fiona
+import rasterio
+from osgeo import gdal
+from osgeo import ogr
+
 
 
 
@@ -1290,43 +1296,100 @@ def download_landsat_tool(
     return f"Successfully downloaded {len(downloaded_files)} files to {output_directory}."
 
 
+@tool
+def scan_directory_for_gis_files(directory_path: str) -> str:
+    """Scans a directory for GIS-compatible files and returns their details. 
+    These directories are external directories that are not part of the workspace (inside the geodatabases).
+    
+    Args:
+        directory_path: Path to the directory to scan
+        
+    Returns:
+        JSON string containing file information categorized by type:
+        {
+            "vector_files": [
+                {
+                    "name": str,
+                    "path": str,
+                    "type": str,  # "Shapefile", "GeoJSON", etc.
+                    "driver": str,
+                    "layer_count": int,
+                    "crs": str
+                }
+            ],
+            "raster_files": [
+                {
+                    "name": str,
+                    "path": str,
+                    "type": str,  # "GeoTIFF", "IMG", etc.
+                    "dimensions": [width, height],
+                    "bands": int,
+                    "crs": str
+                }
+            ]
+        }
+    """
+    try:
+        # File extensions to look for
+        vector_extensions = {'.shp', '.geojson', '.gml', '.kml', '.gpkg'}
+        raster_extensions = {'.tif', '.tiff', '.img', '.dem', '.hgt', '.asc'}
+        
+        result = {
+            "vector_files": [],
+            "raster_files": []
+        }
+        
+        for root, _, files in os.walk(directory_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                ext = os.path.splitext(file)[1].lower()
+                
+                # Vector files
+                if ext in vector_extensions:
+                    try:
+                        with fiona.open(file_path) as src:
+                            result["vector_files"].append({
+                                "name": file,
+                                "path": file_path,
+                                "type": src.driver,
+                                "driver": src.driver,
+                                "layer_count": len(src),
+                                "crs": str(src.crs)
+                            })
+                    except Exception:
+                        pass
+                
+                # Raster files
+                elif ext in raster_extensions:
+                    try:
+                        with rasterio.open(file_path) as src:
+                            result["raster_files"].append({
+                                "name": file,
+                                "path": file_path,
+                                "type": src.driver,
+                                "dimensions": [src.width, src.height],
+                                "bands": src.count,
+                                "crs": str(src.crs)
+                            })
+                    except Exception:
+                        pass
+        
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error scanning directory: {str(e)}"
+
 # Add more tools following the same pattern... 
 
 # At the bottom of tools.py
 __all__ = [
-    'add_field',
-    'append_features',
-    'aspect',
-    'buffer_features',
-    'calculate_field',
-    'clip_features',
-    'closest_facility',
-    'create_feature_class',
-    'create_file_geodatabase',
-    'dataset_exists',
-    'define_projection',
-    'delete_features',
-    'describe_dataset',
-    'dissolve_features',
-    'download_landsat_tool',
-    'erase_features',
-    'export_to_csv',
-    'extract_by_mask',
-    'get_environment_settings',
-    'get_workspace_inventory',
-    'hillshade',
-    'import_csv',
-    'intersect_features',
-    'list_fields',
-    'merge_features',
-    'project_features',
-    'reclassify_raster',
-    'repair_geometry',
-    'route',
-    'select_features',
-    'service_area',
-    'slope',
-    'spatial_join',
-    'union_features',
-    'zonal_statistics'
+    'add_field','append_features','aspect','buffer_features','calculate_field',
+    'clip_features','closest_facility','create_feature_class',
+    'create_file_geodatabase','dataset_exists','define_projection',
+    'delete_features','describe_dataset','dissolve_features','download_landsat_tool',
+    'erase_features','export_to_csv','extract_by_mask','get_environment_settings',
+    'get_workspace_inventory','hillshade','import_csv','intersect_features',
+    'list_fields','merge_features','project_features','reclassify_raster',
+    'repair_geometry','route','select_features','service_area','slope',
+    'spatial_join','union_features','zonal_statistics', 'scan_directory_for_gis_files',
+    'scan_directory_for_gis_files'
 ]
