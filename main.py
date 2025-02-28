@@ -788,25 +788,67 @@ class GISGUI:
     def add_directory(self):
         directory = filedialog.askdirectory(title="Select Directory to Watch")
         if directory:
+            # Check if directory already exists in the watched list
+            if directory in self.settings_manager.settings["watched_directories"]:
+                tk.messagebox.showinfo(
+                    "Directory Already Watched",
+                    f"The directory '{directory}' is already being watched."
+                )
+                return
+                
+            # Add the directory to settings
             self.settings_manager.add_directory(directory)
             self.load_watched_directories()
+            
             # Force a complete refresh of environment info when adding directory
             self.gis_agent._environment_info = {}  # Clear the cache completely
+            
+            # Show a message that scanning is in progress
+            tk.messagebox.showinfo(
+                "Scanning Directory",
+                f"Scanning directory '{directory}' for GIS files. This may take a moment..."
+            )
+            
+            # Refresh environment info and update the tree view
             self.gis_agent.refresh_environment_info()
-            # Automatically scan the directories after adding a new one
             self.scan_directories()
+            
+            # Show confirmation message
+            tk.messagebox.showinfo(
+                "Directory Added",
+                f"Directory '{directory}' has been added and scanned successfully."
+            )
     
     def remove_directory(self):
         selection = self.dir_listbox.curselection()
         if selection:
             directory = self.dir_listbox.get(selection[0])
+            
+            # Confirm removal
+            confirm = tk.messagebox.askyesno(
+                "Confirm Removal",
+                f"Are you sure you want to remove the directory '{directory}' from the watched list?"
+            )
+            
+            if not confirm:
+                return
+                
+            # Remove the directory from settings
             self.settings_manager.remove_directory(directory)
             self.load_watched_directories()
+            
             # Force a complete refresh of environment info when removing directory
             self.gis_agent._environment_info = {}  # Clear the cache completely
+            
+            # Refresh environment info and update the tree view
             self.gis_agent.refresh_environment_info()
-            # Automatically update the tree view after removing a directory
             self.scan_directories()
+            
+            # Show confirmation message
+            tk.messagebox.showinfo(
+                "Directory Removed",
+                f"Directory '{directory}' has been removed from the watched list."
+            )
     
     def load_watched_directories(self):
         self.dir_listbox.delete(0, tk.END)
@@ -822,6 +864,10 @@ class GISGUI:
         
         # Use the refreshed external directories info to update the tree
         for directory, result in env_info.get("external_directories", {}).items():
+            # Skip directories that no longer exist or are not in the watched list
+            if directory not in self.settings_manager.settings["watched_directories"]:
+                continue
+                
             dir_node = self.files_tree.insert("", "end", text=directory)
             
             if result.get("vector_files"):
@@ -837,7 +883,6 @@ class GISGUI:
                         str(file.get("layer_count", "-")),
                         "-",  # Dimensions (raster-specific)
                         "-",  # Bands (raster-specific)
-
                     )
                     self.files_tree.insert(vector_node, "end", text="", values=values)
             
@@ -854,8 +899,7 @@ class GISGUI:
                         file.get("crs", "-"),
                         "-",  # Layer_count (vector-specific)
                         dimensions,
-                        str(file.get("bands", "-")),
-
+                        str(file.get("bands", "-")),  # Use bands as returned by the tool
                     )
                     self.files_tree.insert(raster_node, "end", text="", values=values)
     
