@@ -1,9 +1,15 @@
-langchain==0.1.0
-langchain-google-genai==0.0.6
-langchain-community==0.0.13
-langchain-core==0.1.10
-python-dotenv==1.0.0
-tkinter
-google-generativeai==0.3.1
-arcpy
-# Note: arcpy is typically installed with ArcGIS Pro and not via pip 
+langchain==0.3.19
+langchain-google-genai==2.0.11
+langchain-community==0.3.18
+langchain-core==0.3.40
+langchain-text-splitters==0.3.6
+python-dotenv==1.0.1
+google-generativeai==0.8.4
+# Additional dependencies from imports
+aiohttp==3.9.1
+aiofiles==23.2.1
+requests==2.31.0
+asyncio==3.4.3
+nest-asyncio==1.5.8
+# Note: Do not install arcpy via pip, it comes with ArcGIS Pro
+# Note: fiona and rasterio should be installed via conda, not pip
