@@ -15,11 +15,9 @@ The ArcGIS AI Assistant requires:
 
 ## Environment Setup Options
 
-### Option 1: Using the Automated Setup Scripts (Recommended)
+### Option 1: Using the Automated Setup Script (Recommended)
 
-We provide scripts that automate the environment creation process:
-
-#### For Windows:
+We provide a script that automates the environment creation process:
 
 1. Open a command prompt
 2. Navigate to the project directory:
@@ -37,22 +35,6 @@ The script will:
 - Install required conda packages from the `conda-requirements.txt` file
 - Install required pip packages from the `requirements.txt` file
 - Verify that all required libraries are correctly installed
-
-#### For Linux/macOS:
-
-1. Open a terminal
-2. Navigate to the project directory:
-   ```
-   cd path/to/ArcGIS_AI/gis_agent_project
-   ```
-3. Make the script executable:
-   ```
-   chmod +x setup_environment.sh
-   ```
-4. Run the setup script:
-   ```
-   ./setup_environment.sh
-   ```
 
 ### Option 2: Manual Setup
 
@@ -206,4 +188,43 @@ This priority ensures that ArcGIS-specific packages are installed from the esri 
 1. **Use the Cloned Environment**: This isolates your project dependencies from the main ArcGIS Pro environment.
 2. **Keep Requirements Files Updated**: When adding new dependencies, update the requirements files.
 3. **Specify Version Numbers**: This ensures reproducibility across different installations.
-4. **Separate Conda and Pip Packages**: Install packages available through conda using conda, and use pip only for packages not available through conda. 
+4. **Separate Conda and Pip Packages**: Install packages available through conda using conda, and use pip only for packages not available through conda.
+
+## API Key Configuration
+
+The ArcGIS AI Assistant requires API keys for various functions. These should be set up before running the application.
+
+### Required API Keys
+
+1. **Google Gemini API Key**
+   - Sign up at https://ai.google.dev/
+   - Create a new API key in your Google AI Studio dashboard
+   - Rate limits may apply based on your account type
+
+### Optional API Keys
+
+2. **Tavily API Key** (for web search capabilities)
+   - Sign up at https://tavily.com/
+   - Follow the instructions to create an API key
+   - Free tier provides a limited number of searches per day
+
+3. **NASA Earthdata Credentials** (for Landsat downloads)
+   - Register at https://urs.earthdata.nasa.gov/
+   - Create an Earthdata Login account
+   - After login, go to "Applications → Authorized Apps"
+   - Generate a new application token for use with the ArcGIS AI Assistant
+
+### Setting Environment Variables
+
+The application will look for these API keys in a `.env` file in the project directory or in the settings.json file. You can set these up by:
+
+1. Creating a `.env` file with the following structure:
+   ```
+   GEMINI_API_KEY=your_key_here
+   TAVILY_API_KEY=your_key_here
+   EARTHDATA_USER=your_username
+   EARTHDATA_PASS=your_password
+   EARTHDATA_TOKEN=your_token
+   ```
+
+2. Or by using the Environment tab in the application GUI to enter your API keys 

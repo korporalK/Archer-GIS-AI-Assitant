@@ -22,17 +22,27 @@ import tkinter.messagebox
 
 
 # Import tools properly
-from tools import (
-    add_field,append_features,aspect,buffer_features,calculate_field,clip_features,
-    closest_facility,create_feature_class,create_file_geodatabase,dataset_exists,
-    define_projection,delete_features,describe_dataset,dissolve_features,
-    download_landsat_tool,erase_features,export_to_csv,extract_by_mask,
-    get_environment_settings,get_workspace_inventory,hillshade,import_csv,
-    intersect_features,list_fields,merge_features,project_features,
-    reclassify_raster,repair_geometry,route,select_features,service_area,
-    slope,spatial_join,union_features,zonal_statistics,
-    scan_directory_for_gis_files
-)
+from tools import *
+
+# Function to get all tools from the tools module
+def get_all_tools():
+    """Get all tool functions from the tools module.
+    
+    Returns:
+        A list of all tools defined in the tools module.
+    """
+    import tools
+    import inspect
+    
+    # Get all members from the tools module that are decorated with @tool
+    tool_functions = []
+    for name in dir(tools):
+        obj = getattr(tools, name)
+        # Check if it's a tool function (has 'name', 'description', and 'func' attributes)
+        if hasattr(obj, 'name') and hasattr(obj, 'description') and hasattr(obj, 'func'):
+            tool_functions.append(obj)
+    
+    return tool_functions
 
 # New Directory Management Classes
 class DirectoryManager:
@@ -500,16 +510,7 @@ class GISAgent:
         else:
             print(f"Warning: Workspace path does not exist: {workspace}")
 
-        self.tools = [
-            add_field,append_features,aspect,buffer_features,calculate_field,
-            clip_features,closest_facility,create_feature_class,create_file_geodatabase,
-            dataset_exists,define_projection,delete_features,describe_dataset,dissolve_features,
-            download_landsat_tool,erase_features,export_to_csv,extract_by_mask,
-            get_environment_settings,get_workspace_inventory,hillshade,import_csv,
-            intersect_features,list_fields,merge_features,project_features,
-            reclassify_raster,repair_geometry,route,select_features,service_area,
-            slope,spatial_join,union_features,zonal_statistics,
-        ]
+        self.tools = get_all_tools()
         # Add tool descriptions
         self.tool_descriptions = [
             {

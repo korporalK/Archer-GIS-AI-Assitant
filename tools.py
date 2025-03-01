@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import fiona
 import rasterio
 import traceback
+import tarfile
 
 
 arcpy.env.overwriteOutput = True
@@ -44,19 +45,60 @@ def _is_valid_field_name(feature_class: str, field_name: str) -> bool:
     except Exception:
         return False
 
+def _validate_raster_exists(raster_path: str) -> bool:
+    """Validates that a raster exists and is accessible.
+    
+    Args:
+        raster_path: Path to the raster to validate
+        
+    Returns:
+        bool: True if the raster exists and is accessible, False otherwise
+    """
+    try:
+        if not arcpy.Exists(raster_path):
+            return False
+        # Try to create a raster object to ensure it's a valid raster
+        raster = arcpy.Raster(raster_path)
+        return True
+    except Exception:
+        return False
+
 # Feature Class Tools
 @tool
 def buffer_features(input_features: str, output_features: str, buffer_distance: float, buffer_unit: str) -> str:
-    """Buffers the input features by the specified distance and unit.
+    """Creates buffer polygons around input features at a specified distance.
+    
+    This tool generates buffer polygons around input points, lines, or polygons. Buffers can be 
+    used for proximity analysis, creating protection zones, or visual enhancement of features.
+    The buffer distance determines how far from each feature the buffer extends.
+    
+    GIS Concepts:
+    - Buffers create new polygon features that represent areas within a specified distance of input features
+    - Positive buffer distances create larger polygons around the inputs
+    - Buffer unit determines the measurement units (e.g., meters, feet)
+    - Useful for answering questions like "What's within X distance of this feature?"
 
     Args:
-        input_features: The path to the input feature class.
-        output_features: The path to the output feature class.
-        buffer_distance: The buffer distance (e.g., 100).
-        buffer_unit: The buffer unit (e.g., 'Meters', 'Feet', 'Kilometers').
+        input_features: The path to the input feature class (points, lines, or polygons).
+                       Must be an existing feature class in a workspace.
+        output_features: The path where the buffered feature class will be saved.
+                        Will be overwritten if it already exists.
+        buffer_distance: The distance to buffer around each feature.
+                        Must be a positive number.
+        buffer_unit: The unit of measurement for the buffer distance.
+                    Valid values: 'Meters', 'Feet', 'Kilometers', 'Miles', 'NauticalMiles', or 'Yards'.
 
     Returns:
-        A message indicating success or failure.
+        A message indicating success or failure with details about the operation.
+        
+    Example:
+        >>> buffer_features("D:/data/cities.shp", "D:/output/cities_buffer.shp", 1000, "Meters")
+        "Successfully buffered D:/data/cities.shp to D:/output/cities_buffer.shp."
+        
+    Notes:
+        - The input feature class must exist
+        - The output will be overwritten if it already exists
+        - The spatial reference of the output will match the input
     """
     try:
         if not arcpy.Exists(input_features):
@@ -1403,18 +1445,828 @@ def scan_directory_for_gis_files(directory_path: str) -> str:
         traceback.print_exc()  # Print the full traceback for debugging
         return json.dumps({"error": error_msg})
 
-# Add more tools following the same pattern... 
+@tool
+def raster_calculator(input_rasters: List[str], expression: str, output_raster: str) -> str:
+    """Performs calculations on rasters using map algebra expressions.
+    
+    This tool allows you to perform mathematical operations on raster datasets using map algebra.
+    Each input raster is referenced in the expression as 'r1', 'r2', etc., in the order they appear 
+    in the input_rasters list. The calculation is performed on a cell-by-cell basis.
+    
+    GIS Concepts:
+    - Map algebra allows mathematical operations on raster cells
+    - Operations are performed on a cell-by-cell basis
+    - Common uses include terrain analysis, vegetation indices, raster reclassification
+    - Can create new derived datasets from existing rasters
+    
+    Args:
+        input_rasters: List of raster paths to use in the calculation. 
+                      Each raster will be referenced in the expression as 'r1', 'r2', etc.
+                      All rasters must be valid and accessible.
+        expression: A valid map algebra expression using the references 'r1', 'r2', etc.
+                   Can include mathematical operators (+, -, *, /), functions (Abs, Sin, Cos),
+                   and logical operators (<, >, ==, etc.).
+        output_raster: Path to save the result raster.
+                      Will be overwritten if it already exists.
+    
+    Returns:
+        A message indicating success or failure with details about the operation.
+        
+    Example:
+        >>> raster_calculator(["dem1.tif", "dem2.tif"], "(r1 + r2) / 2", "average_dem.tif")
+        "Successfully calculated and saved raster to 'average_dem.tif'."
+        
+        >>> raster_calculator(["landsat_nir.tif", "landsat_red.tif"], "(r1 - r2) / (r1 + r2)", "ndvi.tif")
+        "Successfully calculated and saved raster to 'ndvi.tif'."
+    
+    Notes:
+        - Requires Spatial Analyst extension
+        - Expression syntax must be valid Python that evaluates to a raster
+        - All input rasters should have the same spatial resolution and extent for best results
+        - Output will have the same spatial reference as the inputs
+    """
+    try:
+        # Input validation
+        if not input_rasters:
+            return "Error: No input rasters provided."
+            
+        # Validate that all input rasters exist
+        for i, raster in enumerate(input_rasters):
+            if not _validate_raster_exists(raster):
+                return f"Error: Input raster '{raster}' does not exist or is not a valid raster."
+        
+        # Create references to the input rasters
+        rasters = {}
+        for i, raster_path in enumerate(input_rasters):
+            raster_var = f"r{i+1}"
+            rasters[raster_var] = arcpy.Raster(raster_path)
+        
+        # Replace raster references in the expression
+        calc_expression = expression
+        for var_name, raster_obj in rasters.items():
+            # This approach preserves the expression as is, letting arcpy's Raster Calculator handle it
+            locals()[var_name] = raster_obj
+        
+        # Execute the calculation using the spatial analyst extension
+        arcpy.CheckOutExtension("Spatial")
+        try:
+            # Use eval to create the raster algebra expression
+            result_raster = eval(calc_expression)
+            result_raster.save(output_raster)
+            arcpy.CheckInExtension("Spatial")
+            return f"Successfully calculated and saved raster to '{output_raster}'."
+        except SyntaxError:
+            return f"Error: Invalid expression syntax: {expression}"
+        except Exception as e:
+            return f"Error in raster calculation: {str(e)}"
+        finally:
+            arcpy.CheckInExtension("Spatial")
+    except arcpy.ExecuteError:
+        return f"ArcPy error: {arcpy.GetMessages()}"
+    except Exception as e:
+        return f"An unexpected error occurred: {str(e)}"
 
-# At the bottom of tools.py
+@tool
+def spatial_autocorrelation(input_features: str, value_field: str,
+                           contiguity_method: str = "INVERSE_DISTANCE") -> str:
+    """Calculates Moran's I spatial autocorrelation statistic to measure spatial patterns.
+    
+    This tool analyzes whether a set of features and their associated values exhibit clustered,
+    dispersed, or random spatial patterns. It calculates Moran's I, a measure of spatial 
+    autocorrelation, along with z-scores and p-values to indicate statistical significance.
+    
+    GIS Concepts:
+    - Spatial autocorrelation measures how objects are related in space
+    - Positive spatial autocorrelation: similar values cluster together
+    - Negative spatial autocorrelation: dissimilar values cluster together
+    - Random pattern: no spatial relationship between values
+    - Statistical significance determines if patterns are likely due to random chance
+    
+    Args:
+        input_features: The path to the input feature class containing the values to analyze.
+                       Must be an existing feature class.
+        value_field: The field containing the numeric values to analyze for spatial patterns.
+                    Must be a valid field in the input feature class with numeric values.
+        contiguity_method: The conceptualization of spatial relationships between features.
+                          Options include:
+                          - "INVERSE_DISTANCE" (default): Nearby neighbors have larger influence
+                          - "FIXED_DISTANCE_BAND": Features within a critical distance are analyzed
+                          - "K_NEAREST_NEIGHBORS": Only the k nearest features are analyzed
+                          - "CONTIGUITY_EDGES_ONLY": Only features that share an edge are analyzed
+                          - "CONTIGUITY_EDGES_CORNERS": Features sharing edge or corner are analyzed
+                          - "GET_SPATIAL_WEIGHTS_FROM_FILE": Uses an external spatial weights file
+    
+    Returns:
+        A JSON string containing:
+        - Moran's I index value: ranges from -1 (dispersed) to +1 (clustered)
+        - z-score: standard deviations from the mean
+        - p-value: probability the observed pattern is random
+        - Interpretation of the results
+        
+    Example:
+        >>> spatial_autocorrelation("census_tracts.shp", "income", "INVERSE_DISTANCE")
+        {
+          "moran_index": 0.75,
+          "z_score": 4.2,
+          "p_value": 0.00001,
+          "result_type": "Moran's I",
+          "interpretation": "The pattern exhibits statistically significant clustering."
+        }
+    
+    Notes:
+        - Requires a feature class with at least 30 features for reliable results
+        - Different contiguity methods may produce different results
+        - High positive z-scores indicate clustering of similar values
+        - High negative z-scores indicate dispersion of similar values
+        - P-values less than 0.05 typically indicate statistical significance
+    """
+    try:
+        # Validate inputs
+        if not _feature_class_exists(input_features):
+            return f"Error: Input feature class '{input_features}' does not exist."
+        
+        if not _is_valid_field_name(input_features, value_field):
+            return f"Error: Field '{value_field}' does not exist in '{input_features}'."
+        
+        valid_methods = ["INVERSE_DISTANCE", "FIXED_DISTANCE_BAND", "K_NEAREST_NEIGHBORS", 
+                         "CONTIGUITY_EDGES_ONLY", "CONTIGUITY_EDGES_CORNERS", "GET_SPATIAL_WEIGHTS_FROM_FILE"]
+        
+        if contiguity_method.upper() not in valid_methods:
+            return f"Error: Invalid contiguity_method. Must be one of: {', '.join(valid_methods)}"
+        
+        # Execute Spatial Autocorrelation (Moran's I)
+        result = arcpy.stats.SpatialAutocorrelation(
+            input_features, 
+            value_field, 
+            contiguity_method.upper(),
+            "NO_STANDARDIZATION", 
+            "EUCLIDEAN_DISTANCE",
+            "NONE")
+        
+        # Extract the results
+        results_dict = {
+            "moran_index": result.getOutput(0),
+            "z_score": result.getOutput(1),
+            "p_value": result.getOutput(2),
+            "result_type": "Moran's I",
+            "interpretation": _interpret_moran_i(float(result.getOutput(1)), float(result.getOutput(2)))
+        }
+        
+        return json.dumps(results_dict, indent=2)
+    except arcpy.ExecuteError:
+        return f"Error in Spatial Autocorrelation: {arcpy.GetMessages()}"
+    except Exception as e:
+        return f"An unexpected error occurred: {str(e)}"
+
+def _interpret_moran_i(z_score: float, p_value: float) -> str:
+    """Helper function to interpret Moran's I results."""
+    if p_value > 0.05:
+        return "The pattern does not appear to be significantly different than random."
+    elif z_score > 0:
+        return "The pattern exhibits statistically significant clustering."
+    else:
+        return "The pattern exhibits statistically significant dispersion."
+
+@tool
+def nearest_neighbor_analysis(input_features: str, distance_method: str = "EUCLIDEAN") -> str:
+    """Calculate nearest neighbor statistics for point patterns.
+    
+    Args:
+        input_features: The path to the input point feature class.
+        distance_method: The method for calculating distances.
+                        Options include "EUCLIDEAN" or "MANHATTAN_DISTANCE".
+    
+    Returns:
+        A JSON string containing the nearest neighbor ratio, z-score, and p-value.
+    """
+    try:
+        # Validate inputs
+        if not _feature_class_exists(input_features):
+            return f"Error: Input feature class '{input_features}' does not exist."
+        
+        # Check if the input is a point feature class
+        desc = arcpy.Describe(input_features)
+        if desc.shapeType != "Point":
+            return f"Error: Input feature class must be of point type. Current type: {desc.shapeType}"
+        
+        valid_methods = ["EUCLIDEAN", "MANHATTAN_DISTANCE"]
+        if distance_method.upper() not in valid_methods:
+            return f"Error: Invalid distance_method. Must be one of: {', '.join(valid_methods)}"
+        
+        # Execute Average Nearest Neighbor
+        result = arcpy.stats.AverageNearestNeighbor(
+            input_features,
+            distance_method.upper(),
+            "EUCLIDEAN_DISTANCE",
+            "NONE")
+        
+        # Extract the results
+        results_dict = {
+            "nearest_neighbor_ratio": result.getOutput(0),
+            "z_score": result.getOutput(1),
+            "p_value": result.getOutput(2),
+            "observed_mean_distance": result.getOutput(3),
+            "expected_mean_distance": result.getOutput(4),
+            "interpretation": _interpret_nearest_neighbor(float(result.getOutput(0)), float(result.getOutput(1)), float(result.getOutput(2)))
+        }
+        
+        return json.dumps(results_dict, indent=2)
+    except arcpy.ExecuteError:
+        return f"Error in Nearest Neighbor Analysis: {arcpy.GetMessages()}"
+    except Exception as e:
+        return f"An unexpected error occurred: {str(e)}"
+
+def _interpret_nearest_neighbor(nn_ratio: float, z_score: float, p_value: float) -> str:
+    """Helper function to interpret nearest neighbor results."""
+    if p_value > 0.05:
+        return "The pattern does not appear to be significantly different than random."
+    elif nn_ratio < 1:
+        return "The pattern exhibits statistically significant clustering."
+    else:
+        return "The pattern exhibits statistically significant dispersion."
+
+@tool
+def calculate_ndvi(nir_band: str, red_band: str, output_raster: str) -> str:
+    """Calculates Normalized Difference Vegetation Index (NDVI) from NIR and Red bands.
+    
+    NDVI is one of the most common vegetation indices used to assess vegetation health and density.
+    The formula is: NDVI = (NIR - Red) / (NIR + Red)
+    
+    NDVI values range from -1 to 1, where:
+    - Higher values (0.6 to 1.0): Dense, healthy vegetation
+    - Moderate values (0.2 to 0.5): Sparse vegetation
+    - Low values (0 to 0.1): Bare soil, rocks, urban areas
+    - Negative values: Water, snow, clouds
+    
+    GIS Concepts:
+    - NDVI uses the contrast between red light absorption and NIR reflection by vegetation
+    - Healthy plants absorb red light for photosynthesis and reflect NIR
+    - NDVI is useful for monitoring vegetation health, drought, agricultural productivity
+    - It can help identify seasonal changes and long-term vegetation trends
+    
+    Args:
+        nir_band: The path to the NIR (Near Infrared) band raster.
+                 For Landsat 8-9, this is typically Band 5.
+                 For Sentinel-2, this is typically Band 8.
+        red_band: The path to the Red band raster.
+                 For Landsat 8-9, this is typically Band 4.
+                 For Sentinel-2, this is typically Band 4.
+        output_raster: The path to save the output NDVI raster.
+                      Will be overwritten if it already exists.
+    
+    Returns:
+        A message indicating success or failure with details about the operation.
+        
+    Example:
+        >>> calculate_ndvi("landsat8_B5.tif", "landsat8_B4.tif", "ndvi_result.tif")
+        "Successfully calculated NDVI and saved to 'ndvi_result.tif'."
+    
+    Notes:
+        - Requires Spatial Analyst extension
+        - Input bands should be from the same image/date
+        - Both bands should have the same spatial resolution and extent
+        - Output values range from -1 to 1, with higher values indicating healthier vegetation
+        - Common transformations include scaling to 0-255 or 0-100 for visualization
+    """
+    try:
+        # Validate inputs
+        if not _validate_raster_exists(nir_band):
+            return f"Error: NIR band raster '{nir_band}' does not exist or is not a valid raster."
+        
+        if not _validate_raster_exists(red_band):
+            return f"Error: Red band raster '{red_band}' does not exist or is not a valid raster."
+        
+        # Execute NDVI calculation
+        arcpy.CheckOutExtension("Spatial")
+        try:
+            nir = arcpy.Raster(nir_band)
+            red = arcpy.Raster(red_band)
+            
+            # Calculate NDVI: (NIR - Red) / (NIR + Red)
+            ndvi = arcpy.sa.Float(nir - red) / arcpy.sa.Float(nir + red)
+            ndvi.save(output_raster)
+            
+            arcpy.CheckInExtension("Spatial")
+            return f"Successfully calculated NDVI and saved to '{output_raster}'."
+        except Exception as e:
+            return f"Error in NDVI calculation: {str(e)}"
+        finally:
+            arcpy.CheckInExtension("Spatial")
+    except arcpy.ExecuteError:
+        return f"ArcPy error: {arcpy.GetMessages()}"
+    except Exception as e:
+        return f"An unexpected error occurred: {str(e)}"
+
+@tool
+def calculate_savi(nir_band: str, red_band: str, output_raster: str,
+                  soil_factor: float = 0.5) -> str:
+    """Calculate Soil-Adjusted Vegetation Index (SAVI).
+    
+    SAVI = [(NIR - Red) / (NIR + Red + L)] * (1 + L)
+    where L is a soil adjustment factor (usually 0.5).
+    
+    SAVI is similar to NDVI but accounts for soil brightness variations.
+    
+    Args:
+        nir_band: The path to the NIR band raster.
+        red_band: The path to the Red band raster.
+        output_raster: The path to the output SAVI raster.
+        soil_factor: The soil adjustment factor (L). Default is 0.5.
+                    Values range from 0 (high vegetation) to 1 (low vegetation).
+    
+    Returns:
+        A message indicating success or failure.
+    """
+    try:
+        # Validate inputs
+        if not _validate_raster_exists(nir_band):
+            return f"Error: NIR band raster '{nir_band}' does not exist or is not a valid raster."
+        
+        if not _validate_raster_exists(red_band):
+            return f"Error: Red band raster '{red_band}' does not exist or is not a valid raster."
+        
+        if not isinstance(soil_factor, (int, float)) or soil_factor < 0 or soil_factor > 1:
+            return "Error: soil_factor must be a number between 0 and 1."
+        
+        # Execute SAVI calculation
+        arcpy.CheckOutExtension("Spatial")
+        try:
+            nir = arcpy.Raster(nir_band)
+            red = arcpy.Raster(red_band)
+            
+            # Calculate SAVI: [(NIR - Red) / (NIR + Red + L)] * (1 + L)
+            numerator = nir - red
+            denominator = nir + red + soil_factor
+            savi = arcpy.sa.Float(numerator) / arcpy.sa.Float(denominator) * (1 + soil_factor)
+            savi.save(output_raster)
+            
+            arcpy.CheckInExtension("Spatial")
+            return f"Successfully calculated SAVI and saved to '{output_raster}'."
+        except Exception as e:
+            return f"Error in SAVI calculation: {str(e)}"
+        finally:
+            arcpy.CheckInExtension("Spatial")
+    except arcpy.ExecuteError:
+        return f"ArcPy error: {arcpy.GetMessages()}"
+    except Exception as e:
+        return f"An unexpected error occurred: {str(e)}"
+
+@tool
+def calculate_tpi(dem_raster: str, output_raster: str, neighborhood_size: int = 3) -> str:
+    """Calculate Topographic Position Index (TPI).
+    
+    TPI compares the elevation of each cell in a DEM to the mean elevation of a specified neighborhood around that cell.
+    Positive values indicate locations higher than their surroundings (ridges, peaks),
+    negative values indicate locations lower than their surroundings (valleys, pits),
+    and values near zero indicate flat areas or areas of constant slope.
+    
+    Args:
+        dem_raster: The path to the input Digital Elevation Model (DEM) raster.
+        output_raster: The path to the output TPI raster.
+        neighborhood_size: The size of the neighborhood in cells. Default is 3 (3x3 neighborhood).
+    
+    Returns:
+        A message indicating success or failure.
+    """
+    try:
+        # Validate inputs
+        if not _validate_raster_exists(dem_raster):
+            return f"Error: DEM raster '{dem_raster}' does not exist or is not a valid raster."
+        
+        if not isinstance(neighborhood_size, int) or neighborhood_size < 3 or neighborhood_size % 2 == 0:
+            return "Error: neighborhood_size must be an odd integer greater than or equal to 3."
+        
+        # Execute TPI calculation
+        arcpy.CheckOutExtension("Spatial")
+        try:
+            # Create a neighborhood object
+            neighborhood = arcpy.sa.NbrRectangle(neighborhood_size, neighborhood_size, "CELL")
+            
+            # Calculate focal statistics (mean elevation in the neighborhood)
+            mean_elevation = arcpy.sa.FocalStatistics(
+                dem_raster,
+                neighborhood,
+                "MEAN",
+                "NODATA")
+            
+            # Calculate TPI: Original value - neighborhood mean
+            dem = arcpy.Raster(dem_raster)
+            tpi = dem - mean_elevation
+            
+            tpi.save(output_raster)
+            
+            arcpy.CheckInExtension("Spatial")
+            return f"Successfully calculated TPI and saved to '{output_raster}'."
+        except Exception as e:
+            return f"Error in TPI calculation: {str(e)}"
+        finally:
+            arcpy.CheckInExtension("Spatial")
+    except arcpy.ExecuteError:
+        return f"ArcPy error: {arcpy.GetMessages()}"
+    except Exception as e:
+        return f"An unexpected error occurred: {str(e)}"
+
+@tool
+def batch_process_features(input_folder: str, output_folder: str,
+                         tool_name: str, tool_parameters: Dict[str, Any] = None) -> str:
+    """Processes multiple feature classes using a specified GIS tool.
+    
+    This tool automates the execution of another GIS tool on multiple feature classes.
+    It finds all feature classes in a folder and applies the specified tool to each one, 
+    saving the results to a new folder. This is useful for processing large datasets or 
+    performing repetitive operations across multiple files.
+    
+    GIS Concepts:
+    - Batch processing automates repetitive GIS operations
+    - Useful for applying the same analysis to multiple datasets
+    - Maintains consistent naming conventions for outputs
+    - Significantly reduces manual processing time
+    - Ensures consistent tool parameters across multiple datasets
+    
+    Args:
+        input_folder: Path to the folder containing input feature classes.
+                     All feature classes in this folder will be processed.
+        output_folder: Path to save the output feature classes.
+                      Will be created if it doesn't exist.
+        tool_name: Name of the tool to use for processing.
+                  Must be a valid tool name from this module.
+                  Examples: "buffer_features", "clip_features", "project_features"
+        tool_parameters: Dictionary of parameters to pass to the tool,
+                        excluding input and output paths which are handled automatically.
+                        The keys should match the parameter names of the target tool.
+                        Example: {"buffer_distance": 100, "buffer_unit": "Meters"}
+    
+    Returns:
+        A message summarizing the batch processing results, including success/failure 
+        for each feature class and any error messages.
+        
+    Example:
+        >>> batch_process_features(
+        ...     "D:/data/cities", 
+        ...     "D:/output/buffered_cities",
+        ...     "buffer_features", 
+        ...     {"buffer_distance": 1000, "buffer_unit": "Meters"}
+        ... )
+        "Batch processing summary for 3 feature classes:
+        Processed 'cities_usa.shp': Successfully buffered...
+        Processed 'cities_canada.shp': Successfully buffered...
+        Processed 'cities_mexico.shp': Successfully buffered..."
+    
+    Notes:
+        - The tool will process all feature classes in the input folder
+        - Each output will be named with "_processed" appended to the original name
+        - If the output folder doesn't exist, it will be created
+        - Processing continues even if some feature classes fail
+        - A summary of all operations is returned when complete
+    """
+    try:
+        # Validate inputs
+        if not os.path.exists(input_folder):
+            return f"Error: Input folder '{input_folder}' does not exist."
+        
+        if not os.path.exists(output_folder):
+            try:
+                os.makedirs(output_folder)
+            except Exception as e:
+                return f"Error creating output folder: {str(e)}"
+        
+        # Check if the tool exists in the module namespace
+        if tool_name not in globals() or not callable(globals()[tool_name]):
+            return f"Error: Tool '{tool_name}' not found or is not callable."
+        
+        tool_function = globals()[tool_name]
+        
+        # Initialize parameters if not provided
+        if tool_parameters is None:
+            tool_parameters = {}
+        
+        # Set the environment workspace
+        arcpy.env.workspace = input_folder
+        
+        # List all feature classes in the folder
+        feature_classes = []
+        for ext in ["shp", "gdb"]:
+            if ext == "shp":
+                feature_classes.extend(arcpy.ListFeatureClasses(f"*.{ext}"))
+            elif ext == "gdb":
+                workspace_type = arcpy.Describe(input_folder).workspaceType
+                if workspace_type in ["LocalDatabase", "RemoteDatabase"]:
+                    feature_classes.extend(arcpy.ListFeatureClasses())
+        
+        if not feature_classes:
+            return f"No feature classes found in '{input_folder}'."
+        
+        results = []
+        for fc in feature_classes:
+            input_path = os.path.join(input_folder, fc)
+            output_name = f"{os.path.splitext(fc)[0]}_processed{os.path.splitext(fc)[1]}"
+            output_path = os.path.join(output_folder, output_name)
+            
+            # Prepare parameters for the tool
+            params = tool_parameters.copy()
+            params["input_features"] = input_path
+            
+            # Handle different parameter naming conventions
+            if "output_features" in [param for param in tool_function.__code__.co_varnames]:
+                params["output_features"] = output_path
+            elif "output_feature_class" in [param for param in tool_function.__code__.co_varnames]:
+                params["output_feature_class"] = output_path
+            else:
+                # Add a generic output parameter if the exact name is unknown
+                params["output"] = output_path
+            
+            try:
+                # Execute the tool
+                result = tool_function(**params)
+                results.append(f"Processed '{fc}': {result}")
+            except Exception as e:
+                results.append(f"Failed to process '{fc}': {str(e)}")
+        
+        # Format the results
+        summary = "\n".join(results)
+        return f"Batch processing summary for {len(feature_classes)} feature classes:\n{summary}"
+    except arcpy.ExecuteError:
+        return f"ArcPy error: {arcpy.GetMessages()}"
+    except Exception as e:
+        return f"An unexpected error occurred: {str(e)}"
+
+@tool
+def batch_process_rasters(input_folder: str, output_folder: str,
+                         tool_name: str, tool_parameters: Dict[str, Any] = None) -> str:
+    """Process multiple rasters using specified tool.
+    
+    Args:
+        input_folder: Path to the folder containing input rasters.
+        output_folder: Path to save the output rasters.
+        tool_name: Name of the tool to use for processing.
+        tool_parameters: Dictionary of parameters to pass to the tool,
+                        excluding input and output paths which are handled automatically.
+    
+    Returns:
+        A message summarizing the batch processing results.
+    """
+    try:
+        # Validate inputs
+        if not os.path.exists(input_folder):
+            return f"Error: Input folder '{input_folder}' does not exist."
+        
+        if not os.path.exists(output_folder):
+            try:
+                os.makedirs(output_folder)
+            except Exception as e:
+                return f"Error creating output folder: {str(e)}"
+        
+        # Check if the tool exists in the module namespace
+        if tool_name not in globals() or not callable(globals()[tool_name]):
+            return f"Error: Tool '{tool_name}' not found or is not callable."
+        
+        tool_function = globals()[tool_name]
+        
+        # Initialize parameters if not provided
+        if tool_parameters is None:
+            tool_parameters = {}
+        
+        # Set the environment workspace
+        arcpy.env.workspace = input_folder
+        
+        # List all rasters in the folder
+        rasters = []
+        for ext in ["tif", "img", "dem", "asc"]:
+            rasters.extend(arcpy.ListRasters(f"*.{ext}"))
+        
+        if not rasters:
+            return f"No rasters found in '{input_folder}'."
+        
+        results = []
+        for raster in rasters:
+            input_path = os.path.join(input_folder, raster)
+            output_name = f"{os.path.splitext(raster)[0]}_processed{os.path.splitext(raster)[1]}"
+            output_path = os.path.join(output_folder, output_name)
+            
+            # Prepare parameters for the tool
+            params = tool_parameters.copy()
+            
+            # Handle different parameter naming conventions for raster tools
+            if "in_raster" in [param for param in tool_function.__code__.co_varnames]:
+                params["in_raster"] = input_path
+            elif "input_raster" in [param for param in tool_function.__code__.co_varnames]:
+                params["input_raster"] = input_path
+            else:
+                # Add a generic input parameter if the exact name is unknown
+                params["input"] = input_path
+            
+            if "out_raster" in [param for param in tool_function.__code__.co_varnames]:
+                params["out_raster"] = output_path
+            elif "output_raster" in [param for param in tool_function.__code__.co_varnames]:
+                params["output_raster"] = output_path
+            else:
+                # Add a generic output parameter if the exact name is unknown
+                params["output"] = output_path
+            
+            try:
+                # Execute the tool
+                result = tool_function(**params)
+                results.append(f"Processed '{raster}': {result}")
+            except Exception as e:
+                results.append(f"Failed to process '{raster}': {str(e)}")
+        
+        # Format the results
+        summary = "\n".join(results)
+        return f"Batch processing summary for {len(rasters)} rasters:\n{summary}"
+    except arcpy.ExecuteError:
+        return f"ArcPy error: {arcpy.GetMessages()}"
+    except Exception as e:
+        return f"An unexpected error occurred: {str(e)}"
+
+@tool
+def idw_interpolation(input_points: str, z_field: str, output_raster: str,
+                     cell_size: float, power: float = 2) -> str:
+    """Performs Inverse Distance Weighted (IDW) interpolation on point data.
+    
+    IDW interpolation estimates cell values in a raster by averaging the values of sample data 
+    points within a specified neighborhood. The influence of each point diminishes with distance 
+    according to the power parameter.
+    
+    GIS Concepts:
+    - IDW assumes that points closer to the prediction location have more influence
+    - The power parameter controls how quickly influence diminishes with distance
+    - Higher power values (>2) increase the influence of the nearest points
+    - Lower power values (<2) create smoother surfaces with more distant points having more influence
+    - IDW is an exact interpolator - estimated values at sample points equal their measured values
+    
+    Args:
+        input_points: The path to the input point feature class.
+                     Must contain points with the values to interpolate.
+        z_field: The field containing the values to interpolate.
+                Must be a numeric field in the input feature class.
+        output_raster: The path to save the output interpolated raster.
+                      Will be overwritten if it already exists.
+        cell_size: The cell size for the output raster in the same units as the spatial reference.
+                  Smaller values create higher resolution outputs but increase processing time.
+        power: The power parameter that controls the significance of surrounding points.
+              Default is 2. Range is typically 0.5 to 3.
+              Higher values give more influence to closer points.
+    
+    Returns:
+        A message indicating success or failure with details about the operation.
+        
+    Example:
+        >>> idw_interpolation("rainfall_stations.shp", "annual_mm", "rainfall_surface.tif", 100, 2)
+        "Successfully created IDW interpolation raster: 'rainfall_surface.tif'."
+    
+    Notes:
+        - Requires Spatial Analyst extension
+        - Best suited for datasets where closer points are more related than distant ones
+        - Creates a smooth surface except at input points
+        - Not recommended for data with significant spatial trends or barriers
+        - Interpolated values are limited to the range of input values (no extrapolation)
+        - Consider using cross-validation to determine the optimal power value
+    """
+    try:
+        # Validate inputs
+        if not _feature_class_exists(input_points):
+            return f"Error: Input feature class '{input_points}' does not exist."
+        
+        # Check if the input is a point feature class
+        desc = arcpy.Describe(input_points)
+        if desc.shapeType != "Point":
+            return f"Error: Input feature class must be of point type. Current type: {desc.shapeType}"
+        
+        if not _is_valid_field_name(input_points, z_field):
+            return f"Error: Field '{z_field}' does not exist in '{input_points}'."
+        
+        if not isinstance(cell_size, (int, float)) or cell_size <= 0:
+            return "Error: cell_size must be a positive number."
+        
+        if not isinstance(power, (int, float)) or power <= 0:
+            return "Error: power must be a positive number."
+        
+        # Set up the IDW parameters
+        idw_params = arcpy.sa.RadiusVariable(12, 15000)
+        
+        # Execute IDW
+        arcpy.CheckOutExtension("Spatial")
+        try:
+            result_raster = arcpy.sa.Idw(
+                input_points, 
+                z_field, 
+                cell_size, 
+                power, 
+                idw_params)
+            
+            result_raster.save(output_raster)
+            arcpy.CheckInExtension("Spatial")
+            return f"Successfully created IDW interpolation raster: '{output_raster}'."
+        except Exception as e:
+            return f"Error in IDW interpolation: {str(e)}"
+        finally:
+            arcpy.CheckInExtension("Spatial")
+    except arcpy.ExecuteError:
+        return f"ArcPy error: {arcpy.GetMessages()}"
+    except Exception as e:
+        return f"An unexpected error occurred: {str(e)}"
+
+@tool
+def kriging_interpolation(input_points: str, z_field: str, output_raster: str,
+                         cell_size: float, kriging_model: str = "SPHERICAL") -> str:
+    """Performs Kriging interpolation on point data to create a continuous surface.
+    
+    Kriging is a geostatistical interpolation technique that uses statistical models to predict 
+    values at unsampled locations based on the spatial autocorrelation of measured points. 
+    Unlike simpler methods, Kriging provides both prediction values and measures of uncertainty.
+    
+    GIS Concepts:
+    - Kriging assumes spatial autocorrelation exists in the data
+    - It uses semivariograms to model spatial dependence between points
+    - Different semivariogram models (spherical, exponential, etc.) fit different spatial patterns
+    - Kriging provides the best linear unbiased prediction at unsampled locations
+    - It can account for directional influences (anisotropy) in the data
+    - Provides standard error maps to assess prediction uncertainty
+    
+    Args:
+        input_points: The path to the input point feature class.
+                     Must contain points with the values to interpolate.
+        z_field: The field containing the values to interpolate.
+                Must be a numeric field in the input feature class.
+        output_raster: The path to save the output interpolated raster.
+                      Will be overwritten if it already exists.
+        cell_size: The cell size for the output raster in the same units as the spatial reference.
+                  Smaller values create higher resolution outputs but increase processing time.
+        kriging_model: The semivariogram model to use for the interpolation.
+                      Options include "SPHERICAL", "CIRCULAR", "EXPONENTIAL", "GAUSSIAN", "LINEAR".
+                      Default is "SPHERICAL" which works well for many environmental variables.
+    
+    Returns:
+        A message indicating success or failure with details about the operation.
+        
+    Example:
+        >>> kriging_interpolation("soil_samples.shp", "pH_value", "soil_pH_surface.tif", 50, "EXPONENTIAL")
+        "Successfully created Kriging interpolation raster: 'soil_pH_surface.tif'."
+    
+    Notes:
+        - Requires Spatial Analyst extension
+        - More computationally intensive than IDW or spline methods
+        - Best suited for data with known spatial correlation structure
+        - Performs well with irregularly spaced sample points
+        - Optimal for environmental variables like precipitation, soil properties, or pollution
+        - Consider exploratory spatial data analysis before selecting a semivariogram model
+        - For best results, have at least 30-50 well-distributed sample points
+    """
+    try:
+        # Validate inputs
+        if not _feature_class_exists(input_points):
+            return f"Error: Input feature class '{input_points}' does not exist."
+        
+        # Check if the input is a point feature class
+        desc = arcpy.Describe(input_points)
+        if desc.shapeType != "Point":
+            return f"Error: Input feature class must be of point type. Current type: {desc.shapeType}"
+        
+        if not _is_valid_field_name(input_points, z_field):
+            return f"Error: Field '{z_field}' does not exist in '{input_points}'."
+        
+        if not isinstance(cell_size, (int, float)) or cell_size <= 0:
+            return "Error: cell_size must be a positive number."
+        
+        valid_models = ["SPHERICAL", "CIRCULAR", "EXPONENTIAL", "GAUSSIAN", "LINEAR"]
+        if kriging_model.upper() not in valid_models:
+            return f"Error: Invalid kriging_model. Must be one of: {', '.join(valid_models)}"
+        
+        # Execute Kriging
+        arcpy.CheckOutExtension("Spatial")
+        try:
+            # Create a KrigingModelOrdinary object
+            kriging_params = arcpy.sa.KrigingModelOrdinary(kriging_model.upper())
+            
+            result_raster = arcpy.sa.Kriging(
+                input_points, 
+                z_field, 
+                kriging_params, 
+                cell_size)
+            
+            result_raster.save(output_raster)
+            arcpy.CheckInExtension("Spatial")
+            return f"Successfully created Kriging interpolation raster: '{output_raster}'."
+        except Exception as e:
+            return f"Error in Kriging interpolation: {str(e)}"
+        finally:
+            arcpy.CheckInExtension("Spatial")
+    except arcpy.ExecuteError:
+        return f"ArcPy error: {arcpy.GetMessages()}"
+    except Exception as e:
+        return f"An unexpected error occurred: {str(e)}"
+
+# Update __all__ to include the new tools
 __all__ = [
-    'add_field','append_features','aspect','buffer_features','calculate_field',
-    'clip_features','closest_facility','create_feature_class',
-    'create_file_geodatabase','dataset_exists','define_projection',
-    'delete_features','describe_dataset','dissolve_features','download_landsat_tool',
-    'erase_features','export_to_csv','extract_by_mask','get_environment_settings',
-    'get_workspace_inventory','hillshade','import_csv','intersect_features',
-    'list_fields','merge_features','project_features','reclassify_raster',
-    'repair_geometry','route','select_features','service_area','slope',
-    'spatial_join','union_features','zonal_statistics', 'scan_directory_for_gis_files',
-    'scan_directory_for_gis_files'
+    'add_field','append_features','aspect','batch_process_features','batch_process_rasters',
+    'buffer_features','calculate_field','calculate_ndvi','calculate_savi','calculate_tpi',
+    'clip_features','closest_facility','create_feature_class','create_file_geodatabase',
+    'dataset_exists','define_projection','delete_features','describe_dataset',
+    'dissolve_features','download_landsat_tool','erase_features','export_to_csv',
+    'extract_by_mask','get_environment_settings','get_workspace_inventory','hillshade',
+    'idw_interpolation','import_csv','intersect_features','kriging_interpolation',
+    'list_fields','merge_features','nearest_neighbor_analysis','project_features',
+    'raster_calculator','reclassify_raster', 'repair_geometry','route',
+    'select_features','service_area','slope','spatial_autocorrelation', 'spatial_join',
+    'union_features','zonal_statistics', 'scan_directory_for_gis_files'
 ]

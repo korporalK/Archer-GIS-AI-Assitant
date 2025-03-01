@@ -23,13 +23,12 @@ The ArcGIS AI Assistant helps GIS professionals and analysts by:
 
 ## Environment Setup
 
-This project requires the ArcGIS Pro Python environment. We provide multiple ways to set up your environment:
-
-### Quick Setup (Recommended)
+This project requires the ArcGIS Pro Python environment. We provide an automated setup script:
 
 1. Run the provided setup script:
-   - Windows: `setup_environment.bat`
-   - Linux/macOS: `./setup_environment.sh`
+   ```
+   setup_environment.bat
+   ```
 
 2. Follow the on-screen instructions
 
@@ -39,9 +38,33 @@ For detailed environment setup instructions, see [ENVIRONMENT_SETUP.md](ENVIRONM
 
 ### API Keys Setup
 
+The ArcGIS AI Assistant requires several API keys for full functionality:
+
+### Required API Keys:
+- **Google Gemini API Key**: Required for the AI functionality
+  1. Go to https://ai.google.dev/
+  2. Sign in with your Google account
+  3. Create a new API key or use an existing one
+  4. Copy the API key to your `.env` file
+
+### Optional API Keys:
+- **Tavily API Key**: For enhanced web search capabilities
+  1. Go to https://tavily.com/
+  2. Sign up for an account
+  3. Create a new API key
+  4. Copy the API key to your `.env` file
+
+- **NASA Earthdata Credentials**: For downloading Landsat imagery
+  1. Go to https://urs.earthdata.nasa.gov/
+  2. Create an account
+  3. Go to your profile and generate a token
+  4. Copy your username, password, and token to your `.env` file
+
+### Setting Up API Keys
+
 1. Copy the `.env.template` file to `.env` in the `gis_agent_project` directory:
    ```
-   cp .env.template .env
+   copy .env.template .env
    ```
 
 2. Edit the `.env` file and add your API keys:
@@ -52,6 +75,8 @@ For detailed environment setup instructions, see [ENVIRONMENT_SETUP.md](ENVIRONM
    EARTHDATA_PASS=your_earthdata_password
    EARTHDATA_TOKEN=your_earthdata_token
    ```
+
+3. Alternatively, you can add API keys directly through the application's Environment tab.
 
 ### Workspace Configuration
 
