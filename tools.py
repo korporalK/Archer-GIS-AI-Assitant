@@ -11,15 +11,12 @@ import aiofiles
 from datetime import datetime
 import requests
 from urllib.parse import urlparse
-from pathlib import Path
 import fiona
 import rasterio
-from osgeo import gdal
-from osgeo import ogr
 import traceback
 
 
-
+arcpy.env.overwriteOutput = True
 
 
 # Helper Functions

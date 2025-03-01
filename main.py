@@ -310,6 +310,8 @@ def setup_environment():
         if not api_key:
             raise ValueError("GEMINI_API_KEY environment variable not set. Please set it in the .env file.")
         
+        arcpy.env.overwriteOutput = True
+
         # Check ArcPy license
         if arcpy.ProductInfo() == "NotInitialized":
             raise ValueError("ArcPy license not available. Please check your license.")
@@ -354,7 +356,7 @@ Example format:
 Available tools and their descriptions:
 {tools}
     
-Current workspace: {workspace}
+    Current workspace: {workspace}
 Workspace inventory: {inventory}
 External files available: {external_files}
     
@@ -741,7 +743,7 @@ class GISAgent:
                 planning_input = {
                     "input": user_input if current_iteration == 0 
                             else f"{user_input}\nPrevious verification feedback: {verification_result}",
-                    "workspace": self.workspace,
+                "workspace": self.workspace,
                     "inventory": env_info["workspace_inventory"],
                     "external_files": env_info["external_directories"],
                     "tools": self.tool_descriptions,
@@ -763,18 +765,19 @@ class GISAgent:
                 print("\n2. VERIFICATION PHASE")
                 self.response_queue.put("Verifying...\n") # Send "Verifying..." to GUI
                 verification_input = {
-                    "plan": plan,
-                    "request": user_input,
+                "plan": plan,
+                "request": user_input,
                     "tools": self.tool_descriptions,
                     "inventory": env_info["workspace_inventory"],
                     "external_files": env_info["external_directories"]
                 }
+
                 print(f"Verification Input: {json.dumps(verification_input, indent=2)}")
                 
                 verification_result = self.verifier.invoke(
-                    VERIFIER_PROMPT.format_prompt(**verification_input)
+                VERIFIER_PROMPT.format_prompt(**verification_input)
                 ).content
-                
+            
                 # Clean the verification result
                 verification_result = verification_result.replace("```json", "").replace("```", "").strip()
 
@@ -827,8 +830,8 @@ class GISAgent:
             try:
                 with contextlib.redirect_stdout(captured_output):
                     execution_result = self.executor.invoke({
-                        "input": plan
-                    })
+                            "input": plan
+                })
                     executor_output = captured_output.getvalue()
                     executor_output_cleaned = self._remove_ansi_escape_codes(executor_output)
                     print(f"Execution Result (Summary): {execution_result}")
@@ -846,7 +849,7 @@ class GISAgent:
             print(f"\nERROR: {str(e)}")
             print("Traceback:", traceback.format_exc())
             return f"Error processing request: {str(e)}"
-
+    
     def _update_tree_with_results(self, scan_results):
         """Update the tree view with the scan results.
         
