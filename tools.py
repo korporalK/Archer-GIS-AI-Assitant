@@ -713,7 +713,7 @@ def list_fields(dataset: str) -> str:
 
     
 @tool
-def get_workspace_inventory(workspace: str = None) -> str:
+def get_workspace_gis_files_inventory(workspace: str = None) -> str:
     """Lists all datasets, feature classes, and tables in the current or specified workspace with detailed information.
     
     This tool provides a comprehensive inventory of the ArcGIS workspace contents, including:
@@ -721,6 +721,7 @@ def get_workspace_inventory(workspace: str = None) -> str:
     - Feature classes with their geometry types, spatial references, and feature counts
     - Tables with their row counts
     
+    Use it to find out all the files in the workspace and their information.
     Args:
         workspace (str, required): Path to the workspace (geodatabase or folder). 
     
@@ -2263,7 +2264,7 @@ __all__ = [
     'clip_features','closest_facility','create_feature_class','create_file_geodatabase',
     'dataset_exists','define_projection','delete_features','describe_dataset',
     'dissolve_features','download_landsat_tool','erase_features','export_to_csv',
-    'extract_by_mask','get_environment_settings','get_workspace_inventory','hillshade',
+    'extract_by_mask','get_environment_settings','get_workspace_gis_files_inventory','hillshade',
     'idw_interpolation','import_csv','intersect_features','kriging_interpolation',
     'list_fields','merge_features','nearest_neighbor_analysis','project_features',
     'raster_calculator','reclassify_raster', 'repair_geometry','route',

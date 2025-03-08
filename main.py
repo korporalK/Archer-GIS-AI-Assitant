@@ -68,7 +68,7 @@ class DirectoryManager:
             
             try:
                 print(f"Scanning directory: {directory}")
-                scan_result_str = scan_directory_for_gis_files(directory)
+                scan_result_str = scan_directory_for_gis_files.invoke(directory)
                 try:
                     scan_result = json.loads(scan_result_str)
                     self.scan_cache[directory] = scan_result
@@ -351,7 +351,8 @@ Process:
 4. Identify the necessary tools and parameters required to address the user's request.
 5. Construct a logical sequence of steps that utilize the available tools effectively.
 6. DO NOT ASSUME FIELD NAME, ALWAYS CHECK USING 'list_fields' tool and provide a placeholder.
-
+7. DO NOT ASSUME FILE NAME, ALWAYS CHECK in the directories or the workspace inventory using "get_workspace_inventory" and "scan_directory_for_gis_files" tool and provide a placeholder "file name to be decided by executor based on directories tool output" in the meanwhile.
+8. DO NOT scan the directories or workspace again if you already have the information of the external files in your context.
 Do not include any markdown formatting or code blocks; output ONLY the JSON array.
 
 Example format:
@@ -367,7 +368,7 @@ Available tools and their descriptions:
 {tools}
     
     Current workspace: {workspace}
-Workspace inventory: {inventory}
+Workspace inventory files: {inventory}
 External files available: {external_files}
     
 Output ONLY the JSON array.
@@ -412,9 +413,12 @@ Process:
    - Double-check that the selected tool is appropriate for the data type (vector vs. raster) and analysis goal.
    - Ensure that the sequence of steps logically builds upon previous outputs (e.g., using field listings to inform selection criteria).
    - DO NOT ASSUME FIELD NAME, ALWAYS CHECK USING 'list_fields' tool and provide a placeholder "field name to be decided by executor based on list_fields output" in the meanwhile.
+   - DO NOT ASSUME FILE NAME, ALWAYS CHECK in the directories or the workspace inventory using "get_workspace_inventory" and "scan_directory_for_gis_files" tool and provide a placeholder "file name to be decided by executor based on directories tool output" in the meanwhile.
+   - DO NOT scan the directories or workspace again if you already have the information of the external files in your context.
    - If any step requires an attribute field (or similar parameter) that cannot be predetermined, verify that the plan includes a step to list or examine fields and a clear placeholder indicating that the executor will determine the appropriate field from the list.
    - When using external files, verify proper import steps are included
    - Confirm data source locations (workspace vs external) are correctly handled
+   
    
 2. As you analyze the plan, produce a detailed chain-of-thought that captures your reasoning process.
 3. After completing your reasoning, output a JSON object with exactly two keys:
@@ -433,7 +437,7 @@ Tool Descriptions:
 Plan:
 {plan}
 
-Workspace Inventory:
+Workspace Inventory Files:
 {inventory}
 
 External Files:
@@ -652,7 +656,7 @@ class GISAgent:
                     workspace_inventory = {}
                 else:
                     # Get the workspace inventory
-                    workspace_inventory_str = get_workspace_inventory.invoke(self.workspace)
+                    workspace_inventory_str = get_workspace_gis_files_inventory.invoke(self.workspace)
                     
                     # Parse the JSON result
                     try:
@@ -677,7 +681,7 @@ class GISAgent:
             for directory in watched_directories:
                 try:
                     print(f"Scanning directory: {directory}")
-                    scan_result_str = scan_directory_for_gis_files(directory)
+                    scan_result_str = scan_directory_for_gis_files.invoke(directory)
                     
                     # Ensure the result is valid JSON
                     try:
