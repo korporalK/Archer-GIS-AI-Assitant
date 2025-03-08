@@ -68,7 +68,7 @@ class DirectoryManager:
             
             try:
                 print(f"Scanning directory: {directory}")
-                scan_result_str = scan_directory_for_gis_files.invoke(directory)
+                scan_result_str = scan_external_directory_for_gis_files.invoke(directory)
                 try:
                     scan_result = json.loads(scan_result_str)
                     self.scan_cache[directory] = scan_result
@@ -350,15 +350,17 @@ Process:
 3. Plan any necessary data import or conversion steps.
 4. Identify the necessary tools and parameters required to address the user's request.
 5. Construct a logical sequence of steps that utilize the available tools effectively.
-6. DO NOT ASSUME FIELD NAME, ALWAYS CHECK USING 'list_fields' tool and provide a placeholder.
-7. DO NOT ASSUME FILE NAME, ALWAYS CHECK in the directories or the workspace inventory using "get_workspace_inventory" and "scan_directory_for_gis_files" tool and provide a placeholder "file name to be decided by executor based on directories tool output" in the meanwhile.
-8. DO NOT scan the directories or workspace again if you already have the information of the external files in your context.
+6. Use the workspace inventory and external files provided in the context to plan the steps.
+7. DO NOT ASSUME FIELD NAME, ALWAYS CHECK USING 'list_fields' tool and provide a placeholder.
+8. DO NOT ASSUME FILE NAME, ALWAYS CHECK in the directories and the workspace inventory using "scan_workspace_directory_for_gis_files" and "scan_external_directory_for_gis_files" tool and provide a placeholder "file name to be decided by executor based on directories tool output" in the meanwhile.
+9. DO NOT ASSUME that only GIS file directories have the required files ad the workspace inventory is empty, the workspace may also have the required files, use "scan_workspace_directory_for_gis_files" tool to check the workspace inventory as well.
+10. DO NOT scan the directories or workspace again if you already have the information of the external files in your context.
 Do not include any markdown formatting or code blocks; output ONLY the JSON array.
 
 Example format:
 [
     {{
-        "tool": "get_workspace_inventory",
+        "tool": "scan_workspace_directory_for_gis_files",
         "input": {{"workspace": "D:\\masters_project\\ArcGIS_AI\\Default.gdb"}},
         "description": "List all contents of the current workspace."
     }}
@@ -367,7 +369,7 @@ Example format:
 Available tools and their descriptions:
 {tools}
     
-    Current workspace: {workspace}
+Current workspace: {workspace}
 Workspace inventory files: {inventory}
 External files available: {external_files}
     
@@ -413,11 +415,12 @@ Process:
    - Double-check that the selected tool is appropriate for the data type (vector vs. raster) and analysis goal.
    - Ensure that the sequence of steps logically builds upon previous outputs (e.g., using field listings to inform selection criteria).
    - DO NOT ASSUME FIELD NAME, ALWAYS CHECK USING 'list_fields' tool and provide a placeholder "field name to be decided by executor based on list_fields output" in the meanwhile.
-   - DO NOT ASSUME FILE NAME, ALWAYS CHECK in the directories or the workspace inventory using "get_workspace_inventory" and "scan_directory_for_gis_files" tool and provide a placeholder "file name to be decided by executor based on directories tool output" in the meanwhile.
-   - DO NOT scan the directories or workspace again if you already have the information of the external files in your context.
+   - DO NOT ASSUME FILE NAME, ALWAYS CHECK in the directories and the workspace inventory using "scan_workspace_directory_for_gis_files" and "scan_external_directory_for_gis_files" tool and provide a placeholder "file name to be decided by executor based on directories tool output" in the meanwhile.
+   - If plan does not include "scan_workspace_directory_for_gis_files" tool, DO NOT ASSUME that only gis file directories have the required files, the workspace may also have the required files, use "scan_workspace_directory_for_gis_files" tool to check the workspace inventory as well.
    - If any step requires an attribute field (or similar parameter) that cannot be predetermined, verify that the plan includes a step to list or examine fields and a clear placeholder indicating that the executor will determine the appropriate field from the list.
    - When using external files, verify proper import steps are included
    - Confirm data source locations (workspace vs external) are correctly handled
+   - The correct Index formula must be used for the analysis based on the user request. For example, Do not use NDVI if MNDWI is required by the user request.
    
    
 2. As you analyze the plan, produce a detailed chain-of-thought that captures your reasoning process.
@@ -475,10 +478,11 @@ Process:
 1. Execute each step sequentially.
 2. Reference any results from previous steps if they are used as inputs in later steps.
 3. If a placeholder was provided for selecting an attribute field (because the correct field was unknown at planning time), use the output from the corresponding "list_fields" step to determine and substitute the appropriate field.
-4. After executing all steps, provide a final summary indicating the overall success or failure of the plan execution.
+4. After executing all steps, provide the full plan, and a final summary indicating the the overall success or failure of the plan execution.
 
 Output:
 - Should include relevant tool calls.
+- Should include the full plan.
 - A final summary with the overall status.
 """),
     MessagesPlaceholder(variable_name="chat_history"),
@@ -656,7 +660,7 @@ class GISAgent:
                     workspace_inventory = {}
                 else:
                     # Get the workspace inventory
-                    workspace_inventory_str = get_workspace_gis_files_inventory.invoke(self.workspace)
+                    workspace_inventory_str = scan_workspace_directory_for_gis_files.invoke(self.workspace)
                     
                     # Parse the JSON result
                     try:
@@ -681,7 +685,7 @@ class GISAgent:
             for directory in watched_directories:
                 try:
                     print(f"Scanning directory: {directory}")
-                    scan_result_str = scan_directory_for_gis_files.invoke(directory)
+                    scan_result_str = scan_external_directory_for_gis_files.invoke(directory)
                     
                     # Ensure the result is valid JSON
                     try:
@@ -724,7 +728,7 @@ class GISAgent:
         """Force a refresh of the environment information."""
         return self.get_environment_info(force_refresh=True)
 
-    def process_request(self, user_input: str, max_iterations: int = 3) -> str:
+    def process_request(self, user_input: str, max_iterations: int = 5) -> str:
         """Process a user request through the three-agent pipeline."""
         try:
             print("\n=== Starting Request Processing ===")
