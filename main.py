@@ -5,6 +5,7 @@ from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.memory import ConversationBufferMemory
 from langchain_community.callbacks.manager import get_openai_callback
+from langchain_core.callbacks import BaseCallbackHandler
 import json
 import queue
 import threading
@@ -19,6 +20,8 @@ import contextlib # Import contextlib
 import re
 from settings_manager import SettingsManager
 import tkinter.messagebox
+from langchain.agents.format_scratchpad import format_to_openai_functions
+from langchain.agents.output_parsers import OpenAIFunctionsAgentOutputParser
 
 
 # Import tools properly
@@ -31,13 +34,12 @@ def get_all_tools():
     Returns:
         A list of all tools defined in the tools module.
     """
-    import tools
-    import inspect
+    import less_tools
     
     # Get all members from the tools module that are decorated with @tool
     tool_functions = []
-    for name in dir(tools):
-        obj = getattr(tools, name)
+    for name in dir(less_tools):
+        obj = getattr(less_tools, name)
         # Check if it's a tool function (has 'name', 'description', and 'func' attributes)
         if hasattr(obj, 'name') and hasattr(obj, 'description') and hasattr(obj, 'func'):
             tool_functions.append(obj)
@@ -361,7 +363,7 @@ Attribute Fields: If a step requires an attribute field (for example, to extract
 Example: Instead of outputting:
 {{
     "tool": "calculate_field",
-    "input": {{"layer": "financial_services", "field": "atm", "expression": "some_expression"}},
+    "input": {{"layer": "financial_services", "field": "some field name", "expression": "some_expression"}},
     "description": "Calculate ATM values from the financial_services layer."
 }}
 Output instead:
@@ -391,6 +393,10 @@ Missing Parameters: If any required parameter is unclear or missing, do not gues
 [Process Instructions]
 1. **Review Request and Context:** Analyze the user request along with the current workspace inventory and external file listings.
 2. **Data Verification:** Check if the required GIS data (files, layers, attributes) already exists. Do not plan redundant download or import steps if data is present.
+3. **Landsat Data Considerations:** If the user request involves Landsat data, ensure that the plan includes steps to:
+   - Verify the availability of Landsat data in the workspace or external files.
+   - Check if the required Landsat data is already available in the workspace or external files.
+   - If the required Landsat data is not available, plan a step to download the data using the appropriate tool.
 3. **Plan Geoprocessing Steps:** Identify necessary steps such as:
    - Importing external files (if required) using the appropriate tool.
    - Converting file formats or reprojecting data to a common spatial reference.
@@ -440,6 +446,8 @@ You are provided with:
     - "tool": The name of the tool to be executed.
     - "input": A dictionary of input parameters for that tool.
     - "description": A brief explanation of why the tool is used.
+     
+[Context Information: Tools and Files]
 - Tool Descriptions: {tools}
 - Workspace Inventory Files: {inventory}
 - External Files Available: {external_files}
@@ -458,7 +466,7 @@ For each step in the plan, perform the following checks:
      Instead of a step that states:  
      {{
         "tool": "calculate_field", 
-        "input": {{"layer": "<layer_id>", "field": "atm", "expression": "some_expression"}}, 
+        "input": {{"layer": "<layer_id>", "field": "some field name", "expression": "some_expression"}}, 
         "description": "Calculate ATM values."
      }}
      
@@ -482,6 +490,8 @@ For each step in the plan, perform the following checks:
 - Carefully review each step of the plan using the above checklist.
 - Document your full internal chain-of-thought reasoning.
 - Identify any mistakes, including assumptions or hallucinations where the plan does not verify required inputs.
+- Ask if the field names are being assumed in the plan, if so, ask for the list of fields and their names to be added in the plan.
+- Ask if the satellite data already exists in the workspace or the external files, if so, ask for it to be used instead of downloading it again.
 
 [Output Format]
 After completing your reasoning, output a JSON object with exactly two keys:
@@ -509,28 +519,58 @@ Return a JSON object with exactly two keys:
 
 EXECUTOR_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """[Role and Task]
-You are a GIS task executor. Your role is to execute the provided GIS plan step-by-step using the available tools. You must not assume any missing inputs (such as file names or attribute fields) without verifying them using the appropriate tool.
+You are a GIS task executor with the ability to execute multiple tools in sequence. You MUST complete the ENTIRE PLAN by making all necessary tool calls one after another. NEVER STOP after just one tool call.
 
 [Execution Guidelines]
-1. You will receive a JSON array of steps. Each step is an object with the keys "tool", "input", and "description".
-2. Execute each step in sequence:
-   - For every step, invoke the specified tool with the provided "input" parameters.
-   - If the "input" contains a placeholder (e.g., "field name to be decided by executor based on list_fields output" or "file name to be decided by executor based on scan_workspace_directory_for_gis_files output"), first run the appropriate scanning or listing tool to retrieve the actual value. Then use that verified value in subsequent steps.
-3. Use only the actual outputs from the tool invocations; DO NOT hallucinate or add extra commentary.
-4. Ensure that any output required as an input in a later step is correctly passed along.
-5. After executing all steps, compile a final summary that includes:
-   "final_summary": A concise statement of overall execution success or failure based solely on actual tool outputs.
+1. You will receive a JSON array of steps. EXECUTE ALL OF THEM in order.
+2. For each step:
+   - Call the specified tool with the exact parameters from the plan
+   - If a parameter contains a placeholder (e.g., "field name to be decided by executor based on list_fields output"), first call the appropriate tool to get the actual value
+   - After completing a tool call, IMMEDIATELY CONTINUE to the next step without waiting for further instructions
+   - DO NOT STOP after the first tool call - you must keep going until ALL steps are complete
 
-[Output Format]
-A final summary of the execution outcome.
+3. When handling field values and string comparisons:
+   - Make string comparisons case-insensitive by using UPPER() for SQL WHERE clauses
+   - Use exact field names as returned by list_fields tools
 
-DO NOT Return a JSON object under any circumstances.
-Do not include any internal chain-of-thought or extra keys.
+4. CRITICALLY IMPORTANT: After each tool call, you MUST CONTINUE to the next step in the plan. Do not wait for confirmation to proceed.
+
+5. Only after ALL steps have been executed, provide a final summary of what was accomplished.
+
+Remember: Your MOST IMPORTANT directive is to KEEP MAKING TOOL CALLS until you've completed ALL steps in the plan. Never stop after just one step!
 """),
     MessagesPlaceholder(variable_name="chat_history"),
     ("user", "Here is the plan to execute: {input}"),
     MessagesPlaceholder(variable_name="agent_scratchpad"),
 ])
+
+
+# Custom callback handler for tracking tool usage
+class ToolTrackingHandler(BaseCallbackHandler):
+    def __init__(self):
+        super().__init__()
+        self.tool_starts = 0
+        self.tool_ends = 0
+        self.tools_used = []
+        
+    def on_tool_start(self, serialized, input_str, **kwargs):
+        self.tool_starts += 1
+        tool_name = serialized.get('name', 'unknown')
+        self.tools_used.append(tool_name)
+        print(f"🔧 Starting tool call #{self.tool_starts}: {tool_name}")
+    
+    def on_tool_end(self, output, **kwargs):
+        self.tool_ends += 1
+        print(f"✅ Completed tool call #{self.tool_ends}")
+        
+    def on_chain_start(self, serialized, inputs, **kwargs):
+        if self.tool_starts > 0:
+            print(f"🔄 Continuing execution after {self.tool_starts} tool calls...")
+        
+    def on_llm_start(self, serialized, prompts, **kwargs):
+        if self.tool_starts > 0:
+            # Inject a reminder to continue making tool calls if we've already started
+            print(f"🔔 Reminder: Still need to complete all remaining steps in the plan!")
 
 
 class GISAgent:
@@ -539,7 +579,7 @@ class GISAgent:
         self.workspace = workspace
         self.settings_manager = settings_manager
         self.model = "gemini-2.0-pro-exp-02-05"
-        self.model_small = "gemini-2.0-flash"
+        self.model_small = "gemini-2.0-flash-exp"
         self.response_queue = response_queue
         self._environment_info = {}  # Cache for environment info
 
@@ -587,7 +627,7 @@ class GISAgent:
         llm = ChatGoogleGenerativeAI(model=self.model, 
                                     google_api_key=self.api_key,
                                     temperature=0.0,
-                                    timeout=60)
+                                    timeout=300)
         
         memory = ConversationBufferMemory(memory_key="chat_history",
                                         return_messages=True,
@@ -597,10 +637,10 @@ class GISAgent:
         
         return AgentExecutor(
             agent=agent,
-                           tools=self.tools,
-                           verbose=True,
-                           memory=memory,
-            max_iterations=3,
+            tools=self.tools,
+            verbose=True,
+            memory=memory,
+            max_iterations=10,
             early_stopping_method="generate",
         )
     
@@ -610,18 +650,18 @@ class GISAgent:
         return ChatGoogleGenerativeAI(model=self.model,
                                     google_api_key=self.api_key,
                                     temperature=0.0,
-                                    timeout=60)
+                                    timeout=300)
     
     def _create_executor(self):
         llm = ChatGoogleGenerativeAI(
             model=self.model_small,
-                                    google_api_key=self.api_key,
-            temperature=0.0,
-            max_retries=3,
-            timeout=30
+            google_api_key=self.api_key,
+            temperature=0.05,  # Slightly increased temperature to encourage exploration
+            max_retries=15,
+            timeout=600  # Increased timeout for longer operations
         )
         
-        # Add memory for executor
+        # Add memory for executor with a more specific configuration
         memory = ConversationBufferMemory(
             memory_key="chat_history",
             return_messages=True,
@@ -629,14 +669,22 @@ class GISAgent:
             output_key="output"
         )
         
+        # Create a callback handler to track tool usage
+        tool_tracker = ToolTrackingHandler()
+        
+        # Use the standard tools agent with enhanced configuration
         agent = create_openai_tools_agent(llm, self.tools, EXECUTOR_PROMPT)
+        
         return AgentExecutor(
             agent=agent,
-                           tools=self.tools,
-                           verbose=True,
+            tools=self.tools,
+            verbose=True,
             memory=memory,
-            max_iterations=5,
-            # early_stopping_method="generate",
+            max_iterations=15,  # Increased max iterations to allow for more tool calls
+            handle_parsing_errors=True,
+            return_intermediate_steps=True,  # Return intermediate steps for better debugging
+            max_execution_time=600,  # Set maximum execution time to 10 minutes
+            callbacks=[tool_tracker],  # Add our custom callback handler
         )
     
     def _remove_ansi_escape_codes(self, text):
@@ -653,7 +701,8 @@ class GISAgent:
             plan = plan_result['output'].strip()
             print(f"Raw plan text: {plan}")
             
-            plan = plan.replace("```json", "").replace("```", "").strip()
+            # Use our dedicated function to clean the JSON string
+            plan = clean_json_string(plan)
             print(f"Cleaned plan text: {plan}")
             
             # Validate JSON structure
@@ -829,11 +878,13 @@ class GISAgent:
                 VERIFIER_PROMPT.format_prompt(**verification_input)
                 ).content
             
-                # Clean the verification result
-                verification_result = verification_result.replace("```json", "").replace("```", "").strip()
+                # Clean the verification result using our dedicated function
+                verification_result = clean_json_string(verification_result)
 
                 # Process verification result as JSON
                 try:
+                    print(f"Cleaned verification result for JSON parsing: {verification_result[:100]}...")
+                    
                     verification_json = json.loads(verification_result)
                     detailed_thought = verification_json.get("detailed_thought", "")
                     validity = verification_json.get("validity", "invalid")
@@ -869,31 +920,107 @@ class GISAgent:
             # print(f"Executing Plan: {plan}")
             print(f"Plan JSON sent to Executor: {plan}")
             
+            # Pretty print the plan JSON for better readability
+            try:
+                # Parse the plan into a Python object if it's a string
+                if isinstance(plan, str):
+                    plan_obj = json.loads(plan)
+                else:
+                    plan_obj = plan
+                    
+                # Format the plan with nice indentation and colors
+                formatted_plan = json.dumps(plan_obj, indent=2)
+                
+                # Add some decorative elements
+                print("\n" + "="*80)
+                print("📋 EXECUTION PLAN:")
+                print("="*80)
+                # Print each line with line numbers for easier reference
+                for i, line in enumerate(formatted_plan.splitlines(), 1):
+                    print(f"{i:3d} | {line}")
+                print("="*80 + "\n")
+            except Exception as e:
+                # Fallback to simple printing if there's an error
+                print(f"Plan JSON sent to Executor: {plan}")
+
             # Format the EXECUTOR_PROMPT to see the full input
             executor_input = EXECUTOR_PROMPT.format_prompt(input=plan, agent_scratchpad=[], chat_history=[])
             full_executor_input_content = executor_input.to_string()
-            print("\n--- Full Input to Executor Agent (Prompt + Plan) ---")
+            # print("\n--- Full Input to Executor Agent (Prompt + Plan) ---")
             # print(full_executor_input_content)
-            print("\n--- End of Full Input to Executor Agent ---")
+            # print("\n--- End of Full Input to Executor Agent ---")
 
             # Capture stdout during executor.invoke()
             captured_output = io.StringIO()
             try:
+                print("\nStarting execution of all plan steps...")
+                
+                # Force a clear memory before execution to avoid conflicting history
+                self.executor.memory.clear()
+                
                 with contextlib.redirect_stdout(captured_output):
+                    # Add a specific message to signal that all steps must be executed
                     execution_result = self.executor.invoke({
-                            "input": plan
-                })
-                    executor_output = captured_output.getvalue()
-                    executor_output_cleaned = self._remove_ansi_escape_codes(executor_output)
-                    print(f"Execution Result (Summary): {execution_result}")
-                    self.response_queue.put(f"Executor Output:\n{executor_output_cleaned}\n")
-                return f"Execution completed:\n{execution_result['output']}"
+                        "input": f"Execute ALL steps in this plan WITHOUT STOPPING. Complete EVERY tool call in sequence: {plan}"
+                    })
+                    
+                # Process the output
+                executor_output = captured_output.getvalue()
+                executor_output_cleaned = self._remove_ansi_escape_codes(executor_output)
+                
+                # Check for completed steps in intermediate_steps
+                if 'intermediate_steps' in execution_result:
+                    completed_tools = [step[0].tool for step in execution_result['intermediate_steps']]
+                    print(f"Completed tool calls: {', '.join(completed_tools)}")
+                
+                print(f"Execution Result (Summary): {execution_result.get('output', '')}")
+                self.response_queue.put(f"Executor Output:\n{executor_output_cleaned}\n")
+                
+                # Enhanced display of completed tools
+                if 'intermediate_steps' in execution_result:
+                    completed_tools = [step[0].tool for step in execution_result['intermediate_steps']]
+                    
+                    print("\n" + "="*80)
+                    print("✅ COMPLETED TOOLS:")
+                    print("="*80)
+                    for i, tool_name in enumerate(completed_tools, 1):
+                        print(f"{i:2d}. {tool_name}")
+                    print("="*80)
+                
+                # Enhanced display of execution result
+                result_output = execution_result.get('output', '')
+                print("\n" + "="*80)
+                print("🏁 EXECUTION RESULT SUMMARY:")
+                print("="*80)
+                print(result_output)
+                print("="*80 + "\n")
+                
+                # Send output to the GUI
+                self.response_queue.put(f"Executor Output:\n{executor_output_cleaned}\n")
+                
+                return f"Execution completed:\n{result_output}"
             except Exception as exec_error:
                 executor_output = captured_output.getvalue()
                 executor_output_cleaned = self._remove_ansi_escape_codes(executor_output)
+                
+                # Check if we have any completed steps despite the error
+                completed_steps = []
+                if hasattr(self.executor, "_get_tool_returns") and hasattr(self.executor, "callbacks"):
+                    try:
+                        completed_steps = self.executor._get_tool_returns(self.executor.callbacks.handlers)
+                        if completed_steps:
+                            print(f"Completed {len(completed_steps)} tool calls before error")
+                    except:
+                        pass
+                
                 print(f"Execution error: {str(exec_error)}")
                 error_message = f"Execution failed: {str(exec_error)}"
-                self.response_queue.put(f"Executor Output:\n{executor_output_cleaned}\nExecution error:\n{error_message}\n")
+                
+                # Add more details to the error message
+                error_details = f"Execution failed after completing {len(completed_steps)} steps.\nError: {str(exec_error)}"
+                traceback_str = traceback.format_exc()
+                
+                self.response_queue.put(f"Executor Output:\n{executor_output_cleaned}\nExecution error:\n{error_details}\n")
                 return error_message
             
         except Exception as e:
@@ -1605,6 +1732,111 @@ class GISGUI:
             entry_widget.config(show="")
         else:
             entry_widget.config(show="*")
+
+def clean_json_string(json_str):
+    """
+    Clean a string to make it valid JSON.
+    
+    Args:
+        json_str (str): The JSON string to clean
+        
+    Returns:
+        str: A cleaned JSON string that can be parsed
+    """
+    # Try a series of increasingly aggressive cleaning approaches
+    
+    # First, basic cleaning
+    cleaned = _basic_json_cleaning(json_str)
+    
+    # Test if it's valid JSON
+    try:
+        json.loads(cleaned)
+        return cleaned
+    except json.JSONDecodeError:
+        # If basic cleaning failed, try more aggressive approaches
+        pass
+    
+    # Try more aggressive cleaning
+    cleaned = _aggressive_json_cleaning(cleaned)
+    
+    # Final fallback - if all else fails, attempt to extract just the JSON object/array
+    try:
+        json.loads(cleaned)
+        return cleaned
+    except json.JSONDecodeError:
+        return _extract_json_pattern(cleaned)
+
+def _basic_json_cleaning(json_str):
+    """Basic JSON cleaning - handles common issues"""
+    # Remove markdown code block syntax
+    json_str = json_str.replace("```json", "").replace("```", "").strip()
+    
+    # Remove control characters
+    json_str = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]', '', json_str)
+    
+    # Replace actual newlines and tabs with spaces
+    json_str = re.sub(r'[\n\t\r]+', ' ', json_str)
+    
+    return json_str
+
+def _aggressive_json_cleaning(json_str):
+    """More aggressive JSON cleaning for problematic strings"""
+    # Handle unescaped backslashes
+    json_str = re.sub(r'([^\\])\\([^\\/"bfnrtu])', r'\1\\\\\2', json_str)
+    
+    # Fix unescaped quotes within string values
+    json_str = re.sub(r'(":.*?)([^\\])"(.*?")', r'\1\2\\\"\3', json_str)
+    
+    # Attempt to fix unbalanced quotes
+    open_quotes = 0
+    fixed_str = ""
+    for char in json_str:
+        if char == '"' and (not fixed_str or fixed_str[-1] != '\\'):
+            open_quotes += 1
+            if open_quotes % 2 == 0:
+                # This is a closing quote
+                fixed_str += char
+            else:
+                # This is an opening quote
+                fixed_str += char
+        else:
+            fixed_str += char
+            
+    # If we have unbalanced quotes at the end, add a closing quote
+    if open_quotes % 2 != 0:
+        fixed_str += '"'
+    
+    return fixed_str
+
+def _extract_json_pattern(text):
+    """
+    Extract valid JSON object or array from text.
+    This is a last resort when other cleaning methods fail.
+    """
+    # Try to find JSON object pattern
+    obj_match = re.search(r'(\{.*\})', text)
+    if obj_match:
+        extracted = obj_match.group(1)
+        try:
+            # Test if it's valid
+            json.loads(extracted)
+            return extracted
+        except:
+            pass
+    
+    # Try to find JSON array pattern
+    arr_match = re.search(r'(\[.*\])', text)
+    if arr_match:
+        extracted = arr_match.group(1)
+        try:
+            # Test if it's valid
+            json.loads(extracted)
+            return extracted
+        except:
+            pass
+    
+    # If we get here, nothing worked - return the original with basic cleaning
+    return text
 
 def main():
     try:
