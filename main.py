@@ -22,7 +22,7 @@ import tkinter.messagebox
 
 
 # Import tools properly
-from tools import *
+from less_tools import *
 
 # Function to get all tools from the tools module
 def get_all_tools():
@@ -332,117 +332,164 @@ def setup_environment():
 
 # Prompts
 PLANNER_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a helpful GIS planning assistant. Your task is to develop a step-by-step plan to solve a GIS problem using ONLY the provided tools.
-You must output a JSON array of steps. Each step must be an object with:
-  - tool: The exact name of one of the available tools (no other functions allowed).
-  - input: A dictionary of input parameters exactly matching the tool's required parameters.
-  - description: A clear explanation of why this tool is used in this step.
+    ("system", """[Output Requirements]
+You are a GIS planning assistant. Your goal is to develop a detailed, step-by-step plan to solve a given GIS problem using ONLY the provided tools. Your output must be a valid JSON array without any markdown, code blocks, or extra commentary. Each element in the array must be a JSON object with exactly these keys:
+  - "tool": The exact name of one available tool (do not invent new functions).
+  - "input": A dictionary of input parameters that exactly match the required parameters of that tool.
+  - "description": A brief explanation (one or two sentences) of why this tool is used in that step.
 
-Available tools and their descriptions:
-{tools}
-    
-Current workspace: {workspace}
-Workspace inventory files: {inventory}
-External files available: {external_files}
+[Context Information]
+You are provided with:
+- Available Tools and Their Descriptions: {tools}
+- Current Workspace: {workspace}
+- Workspace Inventory Files: {inventory}
+- External Files Available: {external_files}
 
-Important Environment Information:
-- You have access to files both in the workspace geodatabase and in external directories.
-- When planning operations, consider both workspace data and external files.
-- If needed, you can import external files into the workspace using appropriate tools.
-- Always check if required data already exists before planning data creation or import steps.
+[GIS and Geoprocessing Considerations]
+GIS tasks often include:
+- Data acquisition or verification (e.g., scanning directories for GIS files)
+- Checking spatial reference systems, data formats, and field attributes
+- Importing or converting data (e.g., importing external files into the workspace)
+- Geoprocessing operations such as buffering, overlay analysis, reprojecting, clipping, and attribute querying
+- Ensuring that required fields exist and that numeric, string, and date attributes are correctly formatted
+- Verifying that any index or analysis formula (e.g., NDVI, MNDWI) is appropriate for the user's request
+- Handling cases where the file name or attribute field is unknown by using dedicated scanning or listing tools (e.g., "list_fields", "scan_workspace_directory_for_gis_files", "scan_external_directory_for_gis_files")
 
-Process:
-1. Review the user request, workspace inventory, and available external files.
-2. Consider whether needed data already exists in either the workspace or external directories.
-3. Plan any necessary data import or conversion steps.
-4. Identify the necessary tools and parameters required to address the user's request.
-5. Construct a logical sequence of steps that utilize the available tools effectively.
-6. Use the workspace inventory and external files provided in the context to plan the steps.
-7. DO NOT ASSUME FIELD NAME, ALWAYS CHECK USING 'list_fields' tool and provide a placeholder.
-8. DO NOT ASSUME FILE NAME, ALWAYS CHECK in the directories and the workspace inventory using "scan_workspace_directory_for_gis_files" and "scan_external_directory_for_gis_files" tool and provide a placeholder "file name to be decided by executor based on directories tool output" in the meanwhile.
-9. DO NOT ASSUME that only GIS file directories have the required files ad the workspace inventory is empty, the workspace may also have the required files, use "scan_workspace_directory_for_gis_files" tool to check the workspace inventory as well.
-10. DO NOT scan the directories or workspace again if you already have the information of the external files in your context.
-11. If user explicitly requests you to scan either one of the two, the external files or the workspace inventory, then only scan the one that the user requested.
-12. If user request can be fulfilled using available files, DO NOT PLAN any additional steps of data download. Always use the available files if they already exist.
-13. The correct Index formula must be used for the analysis based on the user request. For example, Do not use NDVI if MNDWI is required by the user request.
-Do not include any markdown formatting or code blocks; output ONLY the JSON array.
+[Critical Instruction: Do Not Assume Inputs]
 
-Example format:
+Attribute Fields: If a step requires an attribute field (for example, to extract "atm" values from a financial dataset) but the correct field name is not explicitly provided, do not assume it. Instead, include a step to retrieve the field names using the "list_fields" tool.
+Example: Instead of outputting:
+{{
+    "tool": "calculate_field",
+    "input": {{"layer": "financial_services", "field": "atm", "expression": "some_expression"}},
+    "description": "Calculate ATM values from the financial_services layer."
+}}
+Output instead:
+{{
+    "tool": "list_fields",
+    "input": {{"layer": "financial_services"}},
+    "description": "Retrieve the list of attribute fields for the financial_services layer to determine the correct field for ATM values."
+}}
+
+File Names: If a step requires a file name (for example, when importing data) and it is unknown, include a step that calls a scanning tool to list available files.
+Example: Instead of assuming:
+{{
+    "tool": "import_csv",
+    "input": {{"file": "data.csv"}},
+    "description": "Import the CSV file containing GIS data."
+}}
+Output instead:
+{{
+    "tool": "scan_workspace_directory_for_gis_files",
+    "input": {{"workspace": "<workspace_directory>"}},
+    "description": "Scan the workspace directory to list available GIS files and determine the correct CSV file."
+}}
+
+Missing Parameters: If any required parameter is unclear or missing, do not guess a default value. Always include a step to retrieve or verify that parameter using the appropriate tool.
+
+
+[Process Instructions]
+1. **Review Request and Context:** Analyze the user request along with the current workspace inventory and external file listings.
+2. **Data Verification:** Check if the required GIS data (files, layers, attributes) already exists. Do not plan redundant download or import steps if data is present.
+3. **Plan Geoprocessing Steps:** Identify necessary steps such as:
+   - Importing external files (if required) using the appropriate tool.
+   - Converting file formats or reprojecting data to a common spatial reference.
+   - Extracting or listing attribute fields when the required field name is unknown. In these cases, include a step that uses a tool (e.g., "list_fields") and use a clear placeholder such as "field name to be decided by executor based on list_fields output".
+   - Scanning directories to determine the correct file names. Use placeholders like "file name to be decided by executor based on scan_workspace_directory_for_gis_files output" when necessary.
+4. **Tool Selection and Parameter Specification:** For each step:
+   - Choose a valid tool from the provided list.
+   - Provide the required parameters exactly as specified in the tool's description.
+   - Do not assume any file names or attribute names; always plan a step to verify them.
+5. **Sequence and Logic:** Ensure that the sequence of steps is logical, that each step builds on the outputs of previous steps, and that no critical dependencies are missing.
+6. **Avoid Redundancies:** If a required file or attribute is already available (from inventory or external files), do not plan unnecessary scanning or download steps unless explicitly requested.
+
+[Output]
+Output ONLY the JSON array representing the plan.
+
+Example Format (do not include markdown or extra text):
 [
     {{
         "tool": "scan_workspace_directory_for_gis_files",
         "input": {{"workspace": "D:\\masters_project\\ArcGIS_AI\\Default.gdb"}},
-        "description": "List all contents of the current workspace."
+        "description": "List all contents of the current workspace to verify available GIS files."
+    }},
+    {{
+        "tool": "list_fields",
+        "input": {{"layer": "placeholder_layer_name"}},
+        "description": "List all fields in the specified layer; use the output to determine the correct attribute field."
     }}
 ]
-
-    
-Output ONLY the JSON array.
 """),
     MessagesPlaceholder(variable_name="chat_history"),
     ("user", "{input}"),
     MessagesPlaceholder(variable_name="agent_scratchpad"),
 ])
 
+
 VERIFIER_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a GIS plan verifier with a chain-of-thought reasoning process. Your task is to verify a GIS plan for errors with detailed internal reasoning.
+    ("system", """[Role and Task]
+You are a GIS plan verifier with a detailed chain-of-thought reasoning process. Your task is to critically evaluate a GIS plan for errors, inconsistencies, and unjustified assumptions. In particular, you must identify if the plan:
+- Assumes file names, attribute field names, or other necessary parameters without verification.
+- Lacks steps to retrieve or verify required inputs (using tools like "list_fields", "scan_workspace_directory_for_gis_files", or "scan_external_directory_for_gis_files").
+- Includes any redundant, illogical, or incomplete sequences of geoprocessing steps.
 
-Tool Descriptions:
-{tools}
+[Input Details]
+You are provided with:
+- Original User Request:
+- Plan: A JSON array of steps. Each step is an object with exactly these keys:
+    - "tool": The name of the tool to be executed.
+    - "input": A dictionary of input parameters for that tool.
+    - "description": A brief explanation of why the tool is used.
+- Tool Descriptions: {tools}
+- Workspace Inventory Files: {inventory}
+- External Files Available: {external_files}
 
-Workspace Inventory Files:
-{inventory}
+[Verification Checklist]
+For each step in the plan, perform the following checks:
+1. **Tool Validity:**  
+   - Verify that the "tool" specified exists among the available tools.
+2. **Input Parameter Accuracy:**  
+   - Ensure that the "input" dictionary exactly matches the tool's required parameters.
+3. **No Unverified Assumptions:**  
+   - **File Names:** If a step uses a file name, ensure that the plan does not assume a default value. For example, if a step uses an input such as `"file": "data.shp"`, check that there is a preceding step that scans the directory (e.g., "scan_workspace_directory_for_gis_files") to verify the file name.  
+   - **Attribute Fields:** If a step uses an attribute field (e.g., `"field": "atm"`), verify that the plan includes a step (using "list_fields") to confirm the correct field name.  
+   - **Other Parameters:** Check for any other required inputs. If a parameter is missing or given as a placeholder (e.g., "to be decided by executor based on ... output"), flag it as a mistake.
+   - **General Example:**  
+     Instead of a step that states:  
+     {{
+        "tool": "calculate_field", 
+        "input": {{"layer": "<layer_id>", "field": "atm", "expression": "some_expression"}}, 
+        "description": "Calculate ATM values."
+     }}
+     
+     The plan should include a prior step like:  
+     {{
+        "tool": "list_fields", 
+        "input": {{"layer": "<layer_id>"}}, 
+        "description": "Retrieve field names for the layer to determine the correct field for ATM values."
+     }}
+     
+4. **Logical Sequence and Completeness:**  
+   - Confirm that the steps are arranged in a logical order and that dependencies (such as using output from one tool as input for a subsequent step) are properly addressed.
+   - Verify that no essential step is missing to achieve the overall GIS task.
+5. **Data Compatibility and Consistency:**  
+   - Ensure that file formats, spatial references, and attribute types are appropriate for the intended operations.
+   - Verify that if an analysis or index formula is required (e.g., for NDVI or MNDWI), the correct one is planned.
+6. **Avoidance of Redundancy:**  
+   - If the required data is already available in the workspace or external files, the plan must not include unnecessary steps for re-downloading or re-scanning unless explicitly requested.
 
-External Files:
-{external_files}
+[Process]
+- Carefully review each step of the plan using the above checklist.
+- Document your full internal chain-of-thought reasoning.
+- Identify any mistakes, including assumptions or hallucinations where the plan does not verify required inputs.
 
-Input:
-- user_request: The original GIS task.
-- plan: A JSON array of steps, where each step includes 'tool', 'input', and 'description'.
-- tool_descriptions: A list of available tools and their descriptions.
-- workspace_inventory: The current inventory of the GIS workspace.
-- external_files: Available GIS files in external directories.
+[Output Format]
+After completing your reasoning, output a JSON object with exactly two keys:
+- "detailed_thought": A string containing your complete chain-of-thought reasoning.
+- "validity": A string that is "valid" if the plan meets all criteria, or "invalid" if there are errors.  
+The key "validity" must appear last in the JSON object.
 
-Additional Verification Checks:
-- Verify that input files referenced in the plan exist either in the workspace or external directories.
-- Ensure proper data import steps are included when using external files.
-- Check that file formats are compatible with the intended operations.
-- Verify spatial reference consistency across all data sources.
-
-Process:
-1. Review each step to ensure:
-   - Each 'tool' is valid and available.
-   - Each 'input' contains all required parameters according to the tool's description.
-   - The sequence of steps is logical and coherent in a GIS context.
-   - Outputs from previous steps are appropriately utilized in later steps.
-   - There are no missing steps essential to achieving the overall goal.
-   - Potential data issues (e.g., incorrect spatial reference, missing fields) are accounted for.
-   - Redundancies are minimized; for instance, avoid re-downloading data that already exists.
-   - Confirm that file formats are compatible with the intended tools.
-   - Verify that all datasets use the same spatial reference system or are properly reprojected.
-   - Ensure that all required attribute fields exist and are correctly formatted.
-   - Check for consistency in field naming conventions and units.
-   - Validate that attribute values are within expected ranges and data types (e.g., numeric, string) match tool requirements.
-   - Properly handle NoData values, ensuring they are not misinterpreted during processing.
-   - When resampling or reclassifying, ensure that the chosen method (nearest neighbor, bilinear, cubic, etc.) is suitable for the data type.
-   - Double-check that the selected tool is appropriate for the data type (vector vs. raster) and analysis goal.
-   - Ensure that the sequence of steps logically builds upon previous outputs (e.g., using field listings to inform selection criteria).
-   - DO NOT ASSUME FIELD NAME, ALWAYS CHECK USING 'list_fields' tool and provide a placeholder "field name to be decided by executor based on list_fields output" in the meanwhile.
-   - DO NOT ASSUME FILE NAME, ALWAYS CHECK in the directories and the workspace inventory using "scan_workspace_directory_for_gis_files" and "scan_external_directory_for_gis_files" tool and provide a placeholder "file name to be decided by executor based on directories tool output" in the meanwhile.
-   - If plan does not include "scan_workspace_directory_for_gis_files" tool, DO NOT ASSUME that only gis file directories have the required files, the workspace may also have the required files, use "scan_workspace_directory_for_gis_files" tool to check the workspace inventory as well.
-   - If any step requires an attribute field (or similar parameter) that cannot be predetermined, verify that the plan includes a step to list or examine fields and a clear placeholder indicating that the executor will determine the appropriate field from the list.
-   - When using external files, verify proper import steps are included
-   - Confirm data source locations (workspace vs external) are correctly handled
-   - The correct Index formula must be used for the analysis based on the user request. For example, Do not use NDVI if MNDWI is required by the user request.
-   - If user request can be fulfilled using available files, DO NOT PLAN any additional steps of data download. Always use the available files if they already exist.
-   - If user explicitly requests you to scan either one of the two, the external files or the workspace inventory, then only scan the one that the user requested.
-   
-2. As you analyze the plan, produce a detailed chain-of-thought that captures your reasoning process.
-3. After completing your reasoning, output a JSON object with exactly two keys:
-   - "detailed_thought": Containing the full chain-of-thought reasoning.
-   - "validity": A final verdict that is either "valid" if the plan is acceptable, or "invalid" if the plan is incorrect. This key must appear last in the JSON object.
-
-Do not output any markdown or additional formatting; output only the JSON object.
+Output ONLY the JSON object with no extra formatting or markdown.
 """),
     ("user", """
 Original User Request:
@@ -453,46 +500,32 @@ Plan:
 
 Output:
 Return a JSON object with exactly two keys:
-- "detailed_thought": Your complete chain-of-thought reasoning.
-- "validity": "valid" if the plan is correct, and "invalid" if the plan is incorrect.
+- "detailed_thought": Your complete reasoning process.
+- "validity": "valid" if the plan is correct; "invalid" if not.
 """)
 ])
 
+
+
 EXECUTOR_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a GIS task executor. Your role is to execute the provided plan step-by-step using the available tools.
-Each step in the plan is an object with:
-- tool: The name of the tool to execute.
-- input: The parameters required for that tool.
-- description: A brief explanation of why this step is necessary.
+    ("system", """[Role and Task]
+You are a GIS task executor. Your role is to execute the provided GIS plan step-by-step using the available tools. You must not assume any missing inputs (such as file names or attribute fields) without verifying them using the appropriate tool.
 
-Example format:
-[
-    {{
-        "tool": "buffer_features",
-        "input": {{
-            "input_features": "input.shp",
-            "output_features": "buffered_output.shp",
-            "buffer_distance": 100,
-            "buffer_unit": "Meters"
-            }},
-        "description": "Buffer the input features by 100 meters."
-    }}
-]     
+[Execution Guidelines]
+1. You will receive a JSON array of steps. Each step is an object with the keys "tool", "input", and "description".
+2. Execute each step in sequence:
+   - For every step, invoke the specified tool with the provided "input" parameters.
+   - If the "input" contains a placeholder (e.g., "field name to be decided by executor based on list_fields output" or "file name to be decided by executor based on scan_workspace_directory_for_gis_files output"), first run the appropriate scanning or listing tool to retrieve the actual value. Then use that verified value in subsequent steps.
+3. Use only the actual outputs from the tool invocations; DO NOT hallucinate or add extra commentary.
+4. Ensure that any output required as an input in a later step is correctly passed along.
+5. After executing all steps, compile a final summary that includes:
+   "final_summary": A concise statement of overall execution success or failure based solely on actual tool outputs.
 
-Process:
-1. Execute each step sequentially and EXECUTE THEM ALL, DO NOT SKIP ANY STEPS.
-2. Reference any results from previous steps if they are used as inputs in later steps.
-3. If a placeholder was provided for selecting an attribute field (because the correct field was unknown at planning time), use the output from the corresponding "list_fields" step to determine and substitute the appropriate field.
-4. If a placeholder was provided for selecting a file name (because the correct file name was unknown at planning time), use the output from the corresponding "scan_workspace_directory_for_gis_files" and "scan_external_directory_for_gis_files" tool to determine and substitute the appropriate file name.
-5. After executing all steps, provide the full plan, and a final summary indicating the the overall success or failure of the plan execution.
-6. Reason through your choices based on the results of the previous steps before making a decision when plan requires a decision on the tool parameters.
-7. DO NOT HALLUCINATE the tool calls in the summary, only include the tool calls and the input parameters that you used.
-8. DO NOT HALLUCINATE the tool outputs in the summary, only use the actual tool outputs that you got for the summary.
+[Output Format]
+A final summary of the execution outcome.
 
-Output:
-- Should include relevant tool calls.
-- Should include the full plan with the tool calls and the input parameters that you used.
-- A final summary with the overall status.
+DO NOT Return a JSON object under any circumstances.
+Do not include any internal chain-of-thought or extra keys.
 """),
     MessagesPlaceholder(variable_name="chat_history"),
     ("user", "Here is the plan to execute: {input}"),
@@ -506,7 +539,7 @@ class GISAgent:
         self.workspace = workspace
         self.settings_manager = settings_manager
         self.model = "gemini-2.0-pro-exp-02-05"
-        self.model_small = "gemini-2.0-flash-exp"
+        self.model_small = "gemini-2.0-flash"
         self.response_queue = response_queue
         self._environment_info = {}  # Cache for environment info
 
@@ -766,11 +799,11 @@ class GISAgent:
                     "external_files": env_info["external_directories"],
                     "tools": self.tool_descriptions,
                 }
-                print(f"Planning Input: {json.dumps(planning_input, indent=2)}")
+                # print(f"Planning Input: {json.dumps(planning_input, indent=2)}")
                 
                 try:
                     plan_result = self.planner.invoke(planning_input)
-                    print(f"Raw Planner Output: {plan_result['output']}")
+                    # print(f"Raw Planner Output: {plan_result['output']}")
                     plan = self._extract_plan(plan_result)
                     print(f"Extracted Plan: {plan}")
                 except ValueError as e:
@@ -790,7 +823,7 @@ class GISAgent:
                     "external_files": env_info["external_directories"]
                 }
 
-                print(f"Verification Input: {json.dumps(verification_input, indent=2)}")
+                # print(f"Verification Input: {json.dumps(verification_input, indent=2)}")
                 
                 verification_result = self.verifier.invoke(
                 VERIFIER_PROMPT.format_prompt(**verification_input)
@@ -814,7 +847,7 @@ class GISAgent:
                         print(f"Verification invalid: {detailed_thought}")
                         # Provide feedback to the planner for the next iteration
                         planning_input["previous_feedback"] = detailed_thought
-                        print(f"Feedback sent to planner: {detailed_thought}")
+                        # print(f"Feedback sent to planner: {detailed_thought}")
                         current_iteration += 1  # Increment iteration for the next loop
                         if current_iteration >= max_iterations:
                             print("Maximum iterations reached. Planning failed.")
@@ -833,14 +866,14 @@ class GISAgent:
             
             # Execution Phase
             print("\n3. EXECUTION PHASE")
-            print(f"Executing Plan: {plan}")
+            # print(f"Executing Plan: {plan}")
             print(f"Plan JSON sent to Executor: {plan}")
             
             # Format the EXECUTOR_PROMPT to see the full input
             executor_input = EXECUTOR_PROMPT.format_prompt(input=plan, agent_scratchpad=[], chat_history=[])
             full_executor_input_content = executor_input.to_string()
             print("\n--- Full Input to Executor Agent (Prompt + Plan) ---")
-            print(full_executor_input_content)
+            # print(full_executor_input_content)
             print("\n--- End of Full Input to Executor Agent ---")
 
             # Capture stdout during executor.invoke()
