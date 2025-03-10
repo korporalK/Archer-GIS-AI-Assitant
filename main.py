@@ -827,55 +827,71 @@ class GISAgent:
             
             # Get complete environment information
             env_info = self.get_environment_info()
-            print(f"\nEnvironment Info: {json.dumps(env_info, indent=2)}")
+            
+            # Send environment info to detailed output
+            self.response_queue.put(f"Environment Info:\n{json.dumps(env_info, indent=2)}\n")
             
             current_iteration = 0
             verification_result = ""
             plan = None
             
             while current_iteration < max_iterations:
-                print(f"\n--- Iteration {current_iteration + 1} ---")
-                self.response_queue.put(f"\n--- Iteration {current_iteration + 1} ---\n") # Send iteration info to GUI
+                iteration_header = f"\n--- ITERATION {current_iteration + 1} ---\n"
+                print(iteration_header)
+                self.response_queue.put(iteration_header)
 
                 # Planning Phase
-                print("\n1. PLANNING PHASE")
-                self.response_queue.put("Planning...\n") # Send "Planning..." to GUI
+                planning_header = "\n1. PLANNING PHASE\n" + "="*40
+                print(planning_header)
+                self.response_queue.put("Planning...\n")
+                self.response_queue.put(planning_header)
+                
                 planning_input = {
                     "input": user_input if current_iteration == 0 
                             else f"{user_input}\nPrevious verification feedback: {verification_result}",
-                "workspace": self.workspace,
+                    "workspace": self.workspace,
                     "inventory": env_info["workspace_inventory"],
                     "external_files": env_info["external_directories"],
                     "tools": self.tool_descriptions,
                 }
-                # print(f"Planning Input: {json.dumps(planning_input, indent=2)}")
+                
+                # Send planning input to detailed output
+                self.response_queue.put(f"Planning Input:\n{json.dumps(planning_input, indent=2)}\n")
                 
                 try:
                     plan_result = self.planner.invoke(planning_input)
-                    # print(f"Raw Planner Output: {plan_result['output']}")
                     plan = self._extract_plan(plan_result)
-                    print(f"Extracted Plan: {plan}")
+                    
+                    # Send plan to detailed output
+                    self.response_queue.put(f"Generated Plan:\n{json.dumps(json.loads(plan), indent=2)}\n")
+                    
                 except ValueError as e:
-                    print(f"Planning Error: {str(e)}")
-                    return f"Planning failed: {str(e)}"
+                    error_msg = f"Planning Error: {str(e)}"
+                    print(error_msg)
+                    self.response_queue.put(f"❌ {error_msg}\n")
+                    return error_msg
                 
-                time.sleep(5)  # Wait for 5 seconds before proceeding to the verification phase
+                time.sleep(2)  # Brief pause before verification
 
                 # Verification Phase
-                print("\n2. VERIFICATION PHASE")
-                self.response_queue.put("Verifying...\n") # Send "Verifying..." to GUI
+                verification_header = "\n2. VERIFICATION PHASE\n" + "="*40
+                print(verification_header)
+                self.response_queue.put("Verifying...\n")
+                self.response_queue.put(verification_header)
+                
                 verification_input = {
-                "plan": plan,
-                "request": user_input,
+                    "plan": plan,
+                    "request": user_input,
                     "tools": self.tool_descriptions,
                     "inventory": env_info["workspace_inventory"],
                     "external_files": env_info["external_directories"]
                 }
-
-                # print(f"Verification Input: {json.dumps(verification_input, indent=2)}")
+                
+                # Send verification input to detailed output
+                self.response_queue.put(f"Verification Input:\n{json.dumps(verification_input, indent=2)}\n")
                 
                 verification_result = self.verifier.invoke(
-                VERIFIER_PROMPT.format_prompt(**verification_input)
+                    VERIFIER_PROMPT.format_prompt(**verification_input)
                 ).content
             
                 # Clean the verification result using our dedicated function
@@ -883,42 +899,52 @@ class GISAgent:
 
                 # Process verification result as JSON
                 try:
-                    print(f"Cleaned verification result for JSON parsing: {verification_result[:100]}...")
+                    self.response_queue.put(f"Verification Result:\n{verification_result}\n")
                     
                     verification_json = json.loads(verification_result)
                     detailed_thought = verification_json.get("detailed_thought", "")
                     validity = verification_json.get("validity", "invalid")
-                    print(f"Verification Detailed Thought: {detailed_thought}")
-                    print(f"Verification Validity: {validity}")
+                    
+                    self.response_queue.put(f"Verification Thought:\n{detailed_thought}\n")
+                    self.response_queue.put(f"Validity: {validity}\n")
                     
                     if validity.lower() == "valid":
-                        print("Plan verified as valid!")
+                        valid_msg = "✅ Plan verified as valid!"
+                        print(valid_msg)
+                        self.response_queue.put(valid_msg + "\n")
                         break  # Exit the while loop if plan is valid
                     else:
-                        print(f"Verification invalid: {detailed_thought}")
+                        invalid_msg = f"❌ Verification invalid: {detailed_thought}"
+                        print(invalid_msg)
+                        self.response_queue.put(invalid_msg + "\n")
+                        
                         # Provide feedback to the planner for the next iteration
                         planning_input["previous_feedback"] = detailed_thought
-                        # print(f"Feedback sent to planner: {detailed_thought}")
                         current_iteration += 1  # Increment iteration for the next loop
-                        if current_iteration >= max_iterations:
-                            print("Maximum iterations reached. Planning failed.")
-                            return "Maximum iterations reached. Planning failed."
                         
-                        time.sleep(5)
+                        if current_iteration >= max_iterations:
+                            max_iter_msg = "Maximum iterations reached. Planning failed."
+                            print(max_iter_msg)
+                            self.response_queue.put(f"❌ {max_iter_msg}\n")
+                            return max_iter_msg
+                        
+                        time.sleep(2)
                         continue  # Continue to next iteration
                         
                 except json.JSONDecodeError as e:
-                    print(f"Verification JSON decode error: {str(e)}")
+                    json_error = f"Verification JSON decode error: {str(e)}"
+                    print(json_error)
+                    self.response_queue.put(f"❌ {json_error}\n")
                     return f"Invalid verification output format: {str(e)}"
             
             # Do not proceed to Execution Phase if the plan is invalid
             if validity.lower() != "valid":
-                return "Plan is invalid after maximum iterations. Execution phase skipped."
+                invalid_plan_msg = "Plan is invalid after maximum iterations. Execution phase skipped."
+                self.response_queue.put(f"❌ {invalid_plan_msg}\n")
+                return invalid_plan_msg
             
             # Execution Phase
             print("\n3. EXECUTION PHASE")
-            # print(f"Executing Plan: {plan}")
-            print(f"Plan JSON sent to Executor: {plan}")
             
             # Pretty print the plan JSON for better readability
             try:
@@ -1060,13 +1086,14 @@ class GISGUI:
         self.response_queue = queue.Queue()
         self.request_queue = queue.Queue()  # Initialize request_queue
         self.root = tk.Tk()
-        self.root.title("GIS Agent")
+        self.root.title("ARCHER - GIS Agent - Powered by AI")
         self.root.geometry("1200x800")
         self.root.minsize(800, 600)
         
         # Set up variables
         self.workspace_var = tk.StringVar(value=self.settings_manager.settings["workspace"])
         self.button_colors = ["#4CAF50", "#5CBF60", "#6CCF70", "#7CDF80", "#8CEF90", "#7CDF80", "#6CCF70", "#5CBF60"]
+        self.agent_thread = None  # Track the agent worker thread
         
         # Create managers (tree_manager will be initialized after tree view is created)
         self.directory_manager = DirectoryManager(self.settings_manager, self.gis_agent)
@@ -1094,15 +1121,15 @@ class GISGUI:
     def _background_initial_scan(self):
         """Background thread for initial directory scan"""
         try:
-            self.update_response_area("Performing initial scan of watched directories...")
+            self.update_response_area("Performing initial scan of watched directories...", "detail", "info")
             scan_results = self.directory_manager.scan_all_directories(
-                callback=lambda msg, _: self.update_response_area(msg)
+                callback=lambda msg, _: self.update_response_area(msg, "detail", "info")
             )
             
             # Update tree view in main thread
             self.root.after(0, lambda: self._update_tree_with_results(scan_results))
         except Exception as e:
-            self.update_response_area(f"Error in initial scan: {str(e)}")
+            self.update_response_area(f"Error in initial scan: {str(e)}", "detail", "error")
     
     def _update_tree_with_results(self, scan_results):
         """Update the tree view with the scan results.
@@ -1129,7 +1156,7 @@ class GISGUI:
         )
     
     def setup_gui(self):
-        self.root.title("ArcGIS AI Assistant")
+        self.root.title("ARCHER - GIS Agent - Powered by AI")
         
         # Set window dimensions and position
         screen_width = self.root.winfo_screenwidth()
@@ -1148,13 +1175,18 @@ class GISGUI:
         self.root.minsize(window_width, 600)
         self.root.configure(bg="#f0f0f0")
         
+        # Create ttk style for buttons
+        style = ttk.Style()
+        style.configure("TButton", font=("Segoe UI", 10))
+        style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"))
+        
         # Create notebook for tabs
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         # Main chat tab
         self.chat_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.chat_frame, text="Chat")
+        self.notebook.add(self.chat_frame, text="GIS Assistant")
         
         # Environment tab
         self.env_frame = ttk.Frame(self.notebook)
@@ -1167,63 +1199,72 @@ class GISGUI:
         self.setup_environment_frame()
     
     def setup_chat_frame(self):
-        # Main frame with groove relief
-        main_frame = tk.Frame(self.chat_frame, bg="#f0f0f0", bd=10, relief="groove")
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        """Set up the chat interface inside the existing chat_frame"""
+        # Note: self.chat_frame is already created in setup_gui
         
-        # Output frame with white background
-        output_frame = tk.Frame(main_frame, bg="white", bd=2, relief="groove")
-        output_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # Create notebook for tabs inside the existing chat_frame
+        self.chat_notebook = ttk.Notebook(self.chat_frame)
+        self.chat_notebook.pack(fill=tk.BOTH, expand=True)
         
-        # Response area with better styling
-        self.response_area = scrolledtext.ScrolledText(
-            output_frame, 
-            font=("Arial", 11),
-            wrap=tk.WORD,
-            bg="white",
-            state='disabled',
-            bd=0
-        )
-        self.response_area.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
+        # Simple Chat Tab
+        self.simple_chat_tab = ttk.Frame(self.chat_notebook)
+        self.chat_notebook.add(self.simple_chat_tab, text="Conversation")
         
-        # Input frame
-        input_frame = tk.Frame(main_frame, bg="#f0f0f0", bd=2, relief="groove")
-        input_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+        # Detailed Output Tab
+        self.detailed_tab = ttk.Frame(self.chat_notebook)
+        self.chat_notebook.add(self.detailed_tab, text="Detailed Output")
         
-        # Input box with placeholder
-        self.input_box = tk.Text(
-            input_frame,
-            height=4,  # Initial height
-            width=40,
-            wrap=tk.WORD,  # Ensure text wraps
-            font=("Arial", 12),
-            bd=0,
-            highlightthickness=0
-        )
-        self.input_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=5)
-        self.input_box.insert("1.0", "Enter your GIS request")
-        self.input_box.config(fg='gray')
+        # Chat area (simplified) in the Chat tab
+        self.response_area = scrolledtext.ScrolledText(self.simple_chat_tab, wrap=tk.WORD, width=60, height=20, font=("Segoe UI", 10))
+        self.response_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.response_area.config(state="disabled")
+        self.response_area.tag_configure("user", foreground="#007acc", font=("Segoe UI", 10, "bold"))
+        self.response_area.tag_configure("agent", foreground="#228B22", font=("Segoe UI", 10))
+        self.response_area.tag_configure("info", foreground="#888888", font=("Segoe UI", 9, "italic"))
+        self.response_area.tag_configure("error", foreground="#cc0000", font=("Segoe UI", 10, "bold"))
         
-        # Input box bindings
-        self.input_box.bind("<FocusIn>", self.on_entry_click)
-        self.input_box.bind("<FocusOut>", self.on_focus_out)
-        self.input_box.bind("<Return>", self.submit_request)
-        self.input_box.bind("<Shift-Return>", lambda e: self.input_box.insert(tk.INSERT, '\n'))
+        # Detailed output area in the Details tab
+        self.detailed_area = scrolledtext.ScrolledText(self.detailed_tab, wrap=tk.WORD, width=60, height=20, font=("Consolas", 9))
+        self.detailed_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.detailed_area.config(state="disabled")
+        # Configure tags for different types of output
+        self.detailed_area.tag_configure("planner", foreground="#0066cc", font=("Consolas", 9, "bold"))
+        self.detailed_area.tag_configure("verifier", foreground="#9933cc", font=("Consolas", 9, "bold"))
+        self.detailed_area.tag_configure("executor", foreground="#cc6600", font=("Consolas", 9, "bold"))
+        self.detailed_area.tag_configure("tool", foreground="#009933", font=("Consolas", 9))
+        self.detailed_area.tag_configure("error", foreground="#cc0000", font=("Consolas", 9, "bold"))
+        self.detailed_area.tag_configure("header", foreground="#000000", background="#f0f0f0", font=("Consolas", 10, "bold"))
         
-        # Animated send button
-        self.send_button = tk.Button(
-            input_frame,
-            text="Send",
-            command=self.submit_request,
-            bg=self.button_colors[0],
-            fg="white",
-            font=("Arial", 12, "bold"),
-            bd=0,
-            activebackground=self.button_colors[0],
-            activeforeground="white"
-        )
-        self.send_button.pack(side=tk.RIGHT, padx=5, pady=5)
-        self.send_button.bind("<Enter>", self.animate_button)
+        # Status indicator frame
+        self.status_frame = ttk.Frame(self.chat_frame)
+        self.status_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        
+        # Status indicator label with icon
+        self.status_icon_label = ttk.Label(self.status_frame, text="🔄")
+        self.status_icon_label.pack(side=tk.LEFT, padx=(5, 2), pady=5)
+        
+        self.status_label = ttk.Label(self.status_frame, text="Ready")
+        self.status_label.pack(side=tk.LEFT, padx=2, pady=5)
+        
+        # Input area with placeholder text
+        self.input_frame = ttk.Frame(self.chat_frame)
+        self.input_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        self.input_area = tk.Text(self.input_frame, wrap=tk.WORD, width=50, height=3, font=("Segoe UI", 10), padx=8, pady=8)
+        self.input_area.pack(fill=tk.X, expand=True, side=tk.LEFT, padx=(0, 5))
+        self.input_area.insert(tk.END, "Enter your GIS task here...")
+        self.input_area.config(fg="grey")
+        
+        # Input bindings for placeholder text behavior
+        self.input_area.bind("<FocusIn>", self.on_entry_click)
+        self.input_area.bind("<FocusOut>", self.on_focus_out)
+        self.input_area.bind("<Return>", self.submit_request)
+        
+        # Submit Button with some styling
+        self.submit_button = ttk.Button(self.input_frame, text="Submit", command=self.submit_request, width=10)
+        self.submit_button.pack(side=tk.RIGHT)
+        self.submit_button.bind("<Enter>", self.animate_button)
+        self.submit_button.bind("<Leave>", self.animate_button)
     
     def setup_environment_frame(self):
         """Set up the environment frame with API keys, workspace, and directories sections."""
@@ -1439,8 +1480,10 @@ class GISGUI:
         self.settings_manager.add_directory(directory)
         self.load_watched_directories()
         
-        # Show progress indicator
-        progress = ScanProgressIndicator(self.root, self.update_response_area)
+        # Show progress indicator with callback that sends updates to the detail tab
+        progress = ScanProgressIndicator(self.root, 
+            lambda msg: self.update_response_area(msg, "detail", "info")
+        )
         progress.show()
         
         # Use a separate thread to scan the directory
@@ -1594,87 +1637,186 @@ class GISGUI:
         threading.Thread(target=background_scan, daemon=True).start()
     
     def on_entry_click(self, event):
-        """Clear placeholder text when entry is clicked."""
-        # For the input box
-        if hasattr(self, 'input_box') and event.widget == self.input_box:
-            if self.input_box.get("1.0", tk.END).strip() == "Enter your GIS request":
-                self.input_box.delete("1.0", tk.END)
-                self.input_box.config(fg='black')
+        """Clear placeholder text when input area is clicked."""
+        # For the input area
+        if event.widget == self.input_area:
+            if self.input_area.get("1.0", tk.END).strip() == "Enter your GIS task here...":
+                self.input_area.delete("1.0", tk.END)
+                self.input_area.config(fg='black')
     
     def on_focus_out(self, event):
         """Restore placeholder text when focus is lost and the field is empty."""
-        # For the input box
-        if hasattr(self, 'input_box') and event.widget == self.input_box:
-            if not self.input_box.get("1.0", tk.END).strip():
-                self.input_box.insert("1.0", "Enter your GIS request")
-                self.input_box.config(fg='gray')
+        # For the input area
+        if event.widget == self.input_area:
+            if not self.input_area.get("1.0", tk.END).strip():
+                self.input_area.delete("1.0", tk.END)  # Clear first to avoid duplicating
+                self.input_area.insert("1.0", "Enter your GIS task here...")
+                self.input_area.config(fg='grey')
     
     def animate_button(self, event):
-        current_color_index = self.button_colors.index(self.send_button.cget("bg"))
-        next_color_index = (current_color_index + 1) % len(self.button_colors)
-        self.send_button.config(
-            bg=self.button_colors[next_color_index],
-            activebackground=self.button_colors[next_color_index]
-        )
+        """Handle mouse hover animation for the submit button"""
+        # Use ttk styling instead of direct color manipulation since we're using ttk.Button
+        if event.type == tk.EventType.Enter:
+            self.submit_button.config(style="Accent.TButton")
+        else:
+            self.submit_button.config(style="TButton")
     
     def submit_request(self, event=None):
-        request = self.input_box.get("1.0", tk.END).strip()
-        if request and request != "Enter your GIS request":
-            self.request_queue.put(request)
-            self.input_box.delete("1.0", tk.END)
-            self.update_response_area(f"User: {request}\n")
-            self.input_box.focus_set()
+        user_input = self.input_area.get("1.0", tk.END).strip()
+        if user_input and user_input != "Enter your GIS task here...":
+            # Update chat area with user query
+            self.update_response_area(f"You: {user_input}", "chat", "user")
+            
+            # Update detailed area with a header for the query
+            self.update_response_area("\n" + "="*80, "detail", "header")
+            self.update_response_area(f"📝 NEW QUERY: {user_input}", "detail", "header")
+            self.update_response_area("="*80 + "\n", "detail", "header")
+            
+            # Clear input area
+            self.input_area.delete("1.0", tk.END)
+            
+            # Update status
+            self.update_status("Processing your request...", "⏳")
+            
+            # Add the request to the queue for processing
+            self.request_queue.put(user_input)
+            
+            return "break"  # Prevents the default Return key behavior
     
-    def update_response_area(self, message: str):
-        """Update the response area with a message.
+    def update_response_area(self, message: str, area_type="chat", message_type="agent"):
+        """
+        Update the response areas with new messages.
         
-        This method can be called from any thread, as it uses the after method
-        to ensure the update happens in the main thread.
+        Args:
+            message (str): The message to display
+            area_type (str): 'chat' for main chat, 'detail' for detailed output
+            message_type (str): 'user', 'agent', 'info', 'planner', 'verifier', 'executor', 'tool', 'error', 'header'
         """
         def _update():
-            self.response_area.configure(state='normal')
-            self.response_area.insert(tk.END, message + "\n")
-            self.response_area.see(tk.END)
-            self.response_area.configure(state='disabled')
+            # Update appropriate area based on type
+            if area_type == "chat":
+                self.response_area.config(state="normal")
+                self.response_area.insert(tk.END, message + "\n\n", message_type)
+                self.response_area.see(tk.END)
+                self.response_area.config(state="disabled")
+            elif area_type == "detail":
+                self.detailed_area.config(state="normal")
+                self.detailed_area.insert(tk.END, message + "\n", message_type)
+                self.detailed_area.see(tk.END)
+                self.detailed_area.config(state="disabled")
         
-        # If called from the main thread, update directly
-        if threading.current_thread() is threading.main_thread():
-            _update()
-        # If called from another thread, schedule the update in the main thread
-        else:
-            self.root.after(0, _update)
+        self.root.after(10, _update)
+    
+    def update_status(self, status, icon="🔄"):
+        """Update the status indicator with the current operation."""
+        def _update():
+            self.status_icon_label.config(text=icon)
+            self.status_label.config(text=status)
+        
+        self.root.after(10, _update)
     
     def process_responses(self):
+        """Process responses from the agent and route them to the appropriate display areas."""
         try:
-            while True:
-                response = self.response_queue.get_nowait()
-                if response is None:  # Check for None
-                    continue
-                self.update_response_area(response)
-                if response == "Exiting...":
-                    self.root.destroy()
-                    return
-        except queue.Empty:
-            pass
+            while not self.gis_agent.response_queue.empty():
+                message = self.gis_agent.response_queue.get_nowait()
+                
+                # Filter out planning input and environment info - send only to detail tab
+                if ("Environment Info:" in message or 
+                    "Planning Input:" in message or 
+                    "Generated Plan:" in message or 
+                    "Verification Input:" in message or
+                    "Verification Result:" in message or
+                    "Verification Thought:" in message):
+                    # Send these only to detail tab
+                    self.update_response_area(message, "detail", "info")
+                    continue  # Skip further processing
+                
+                # Determine message type and target area based on content
+                if message.startswith("Planning..."):
+                    self.update_status("Planning...", "🧠")
+                    self.update_response_area("Agent is planning...", "chat", "info")
+                    self.update_response_area("\n--- PLANNING PHASE ---", "detail", "planner")
+                
+                elif message.startswith("Verifying..."):
+                    self.update_status("Verifying plan...", "🔍")
+                    self.update_response_area("Agent is verifying the plan...", "chat", "info")
+                    self.update_response_area("\n--- VERIFICATION PHASE ---", "detail", "verifier")
+                
+                elif message.startswith("Executor Output:"):
+                    self.update_status("Executing plan...", "⚙️")
+                    self.update_response_area("Agent is executing the plan...", "chat", "info")
+                    formatted_message = message.replace("Executor Output:", "\n--- EXECUTION PHASE ---")
+                    self.update_response_area(formatted_message, "detail", "executor")
+                
+                elif message.startswith("Execution completed:"):
+                    self.update_status("Awaiting Query", "🤖")  # Reset to awaiting status
+                    clean_message = message.replace("Execution completed:", "Result:")
+                    self.update_response_area(clean_message, "chat", "agent")
+                    self.update_response_area("\n--- EXECUTION COMPLETED ---", "detail", "executor")
+                
+                elif message.startswith("Execution failed:") or "error" in message.lower():
+                    self.update_status("Error occurred", "❌")
+                    clean_message = message.replace("Execution failed:", "Error:")
+                    self.update_response_area(clean_message, "chat", "error")
+                    self.update_response_area("\n--- EXECUTION ERROR ---\n" + message, "detail", "error")
+                
+                elif message.startswith("--- Iteration"):
+                    self.update_response_area(message, "detail", "header")
+                
+                # Route directory scanning and initialization messages to Technical Details tab
+                elif any(keyword in message for keyword in ["Scanning directory", "Scan complete", "Found", "Successfully processed", "Directory scanning", "Performing initial scan"]):
+                    self.update_response_area(message, "detail", "info")
+                    # Optionally update status
+                    if "initial scan" in message:
+                        self.update_status("Scanning directories...", "🔎")
+                    elif "completed" in message:
+                        self.update_status("Ready", "✅")
+                
+                else:
+                    # Default to detailed area for any other messages
+                    self.update_response_area(message, "detail", "info")
+                
+        except Exception as e:
+            print(f"Error processing responses: {str(e)}")
+            self.update_response_area(f"Error processing responses: {str(e)}", "detail", "error")
+        
+        # Check again after 100ms
         self.root.after(100, self.process_responses)
     
     def start_agent_thread(self):
-        def agent_worker():
-            while True:
-                request = self.request_queue.get()
-                if request.lower() == "/exit":
-                    self.response_queue.put("Exiting...")
-                    break
-                
-                result = self.gis_agent.process_request(request)
-                self.response_queue.put(result)
-                self.request_queue.task_done()
-        
-        agent_thread = threading.Thread(target=agent_worker, daemon=True)
-        agent_thread.start()
+        """Start the agent worker thread if it's not already running"""
+        # Only start a new thread if there isn't one or the existing one is dead
+        if self.agent_thread is None or not self.agent_thread.is_alive():
+            def agent_worker():
+                while True:
+                    request = self.request_queue.get()
+                    if request.lower() == "/exit":
+                        self.response_queue.put("Exiting...")
+                        break
+                    
+                    try:
+                        result = self.gis_agent.process_request(request)
+                        self.response_queue.put(result)
+                    except Exception as e:
+                        error_msg = f"Error processing request: {str(e)}"
+                        print(error_msg)
+                        self.response_queue.put(error_msg)
+                    finally:
+                        self.request_queue.task_done()
+            
+            self.agent_thread = threading.Thread(target=agent_worker, daemon=True)
+            self.agent_thread.start()
+            print("Agent thread started.")
+            
+        # Always make sure we're processing responses
         self.process_responses()
     
     def run(self):
+        # Start processing responses from the agent
+        self.process_responses()
+        
+        # Enter the main event loop
         self.root.mainloop()
 
     def save_api_keys(self):
