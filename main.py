@@ -338,6 +338,13 @@ You must output a JSON array of steps. Each step must be an object with:
   - input: A dictionary of input parameters exactly matching the tool's required parameters.
   - description: A clear explanation of why this tool is used in this step.
 
+Available tools and their descriptions:
+{tools}
+    
+Current workspace: {workspace}
+Workspace inventory files: {inventory}
+External files available: {external_files}
+
 Important Environment Information:
 - You have access to files both in the workspace geodatabase and in external directories.
 - When planning operations, consider both workspace data and external files.
@@ -355,6 +362,8 @@ Process:
 8. DO NOT ASSUME FILE NAME, ALWAYS CHECK in the directories and the workspace inventory using "scan_workspace_directory_for_gis_files" and "scan_external_directory_for_gis_files" tool and provide a placeholder "file name to be decided by executor based on directories tool output" in the meanwhile.
 9. DO NOT ASSUME that only GIS file directories have the required files ad the workspace inventory is empty, the workspace may also have the required files, use "scan_workspace_directory_for_gis_files" tool to check the workspace inventory as well.
 10. DO NOT scan the directories or workspace again if you already have the information of the external files in your context.
+11. If user request can be fulfilled using available files, DO NOT PLAN any additional steps of data download. Always use the available files if they already exist.
+12. The correct Index formula must be used for the analysis based on the user request. For example, Do not use NDVI if MNDWI is required by the user request.
 Do not include any markdown formatting or code blocks; output ONLY the JSON array.
 
 Example format:
@@ -366,12 +375,6 @@ Example format:
     }}
 ]
 
-Available tools and their descriptions:
-{tools}
-    
-Current workspace: {workspace}
-Workspace inventory files: {inventory}
-External files available: {external_files}
     
 Output ONLY the JSON array.
 """),
@@ -382,7 +385,16 @@ Output ONLY the JSON array.
 
 VERIFIER_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """You are a GIS plan verifier with a chain-of-thought reasoning process. Your task is to verify a GIS plan for errors with detailed internal reasoning.
-    
+
+Tool Descriptions:
+{tools}
+
+Workspace Inventory Files:
+{inventory}
+
+External Files:
+{external_files}
+
 Input:
 - user_request: The original GIS task.
 - plan: A JSON array of steps, where each step includes 'tool', 'input', and 'description'.
@@ -421,6 +433,7 @@ Process:
    - When using external files, verify proper import steps are included
    - Confirm data source locations (workspace vs external) are correctly handled
    - The correct Index formula must be used for the analysis based on the user request. For example, Do not use NDVI if MNDWI is required by the user request.
+   - If user request can be fulfilled using available files, DO NOT PLAN any additional steps of data download. Always use the available files if they already exist.
    
    
 2. As you analyze the plan, produce a detailed chain-of-thought that captures your reasoning process.
@@ -434,17 +447,8 @@ Do not output any markdown or additional formatting; output only the JSON object
 Original User Request:
 {request}
 
-Tool Descriptions:
-{tools}
-
 Plan:
 {plan}
-
-Workspace Inventory Files:
-{inventory}
-
-External Files:
-{external_files}
 
 Output:
 Return a JSON object with exactly two keys:
@@ -478,11 +482,15 @@ Process:
 1. Execute each step sequentially.
 2. Reference any results from previous steps if they are used as inputs in later steps.
 3. If a placeholder was provided for selecting an attribute field (because the correct field was unknown at planning time), use the output from the corresponding "list_fields" step to determine and substitute the appropriate field.
-4. After executing all steps, provide the full plan, and a final summary indicating the the overall success or failure of the plan execution.
+4. If a placeholder was provided for selecting a file name (because the correct file name was unknown at planning time), use the output from the corresponding "scan_workspace_directory_for_gis_files" and "scan_external_directory_for_gis_files" tool to determine and substitute the appropriate file name.
+5. After executing all steps, provide the full plan, and a final summary indicating the the overall success or failure of the plan execution.
+6. Reason through your choices based on the results of the previous steps before making a decision when plan requires a decision on the tool parameters.
+7. DO NOT HALLUCINATE the tool calls in the summary, only include the tool calls that you used and the input parameters that you used.
+8. DO NOT HALLUCINATE the tool outputs in the summary, only include the tool outputs that you got.
 
 Output:
 - Should include relevant tool calls.
-- Should include the full plan.
+- Should include the full plan with the tool calls and the input parameters that you used.
 - A final summary with the overall status.
 """),
     MessagesPlaceholder(variable_name="chat_history"),
