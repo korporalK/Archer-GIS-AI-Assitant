@@ -362,8 +362,9 @@ Process:
 8. DO NOT ASSUME FILE NAME, ALWAYS CHECK in the directories and the workspace inventory using "scan_workspace_directory_for_gis_files" and "scan_external_directory_for_gis_files" tool and provide a placeholder "file name to be decided by executor based on directories tool output" in the meanwhile.
 9. DO NOT ASSUME that only GIS file directories have the required files ad the workspace inventory is empty, the workspace may also have the required files, use "scan_workspace_directory_for_gis_files" tool to check the workspace inventory as well.
 10. DO NOT scan the directories or workspace again if you already have the information of the external files in your context.
-11. If user request can be fulfilled using available files, DO NOT PLAN any additional steps of data download. Always use the available files if they already exist.
-12. The correct Index formula must be used for the analysis based on the user request. For example, Do not use NDVI if MNDWI is required by the user request.
+11. If user explicitly requests you to scan either one of the two, the external files or the workspace inventory, then only scan the one that the user requested.
+12. If user request can be fulfilled using available files, DO NOT PLAN any additional steps of data download. Always use the available files if they already exist.
+13. The correct Index formula must be used for the analysis based on the user request. For example, Do not use NDVI if MNDWI is required by the user request.
 Do not include any markdown formatting or code blocks; output ONLY the JSON array.
 
 Example format:
@@ -434,7 +435,7 @@ Process:
    - Confirm data source locations (workspace vs external) are correctly handled
    - The correct Index formula must be used for the analysis based on the user request. For example, Do not use NDVI if MNDWI is required by the user request.
    - If user request can be fulfilled using available files, DO NOT PLAN any additional steps of data download. Always use the available files if they already exist.
-   
+   - If user explicitly requests you to scan either one of the two, the external files or the workspace inventory, then only scan the one that the user requested.
    
 2. As you analyze the plan, produce a detailed chain-of-thought that captures your reasoning process.
 3. After completing your reasoning, output a JSON object with exactly two keys:
@@ -479,14 +480,14 @@ Example format:
 ]     
 
 Process:
-1. Execute each step sequentially.
+1. Execute each step sequentially and EXECUTE THEM ALL, DO NOT SKIP ANY STEPS.
 2. Reference any results from previous steps if they are used as inputs in later steps.
 3. If a placeholder was provided for selecting an attribute field (because the correct field was unknown at planning time), use the output from the corresponding "list_fields" step to determine and substitute the appropriate field.
 4. If a placeholder was provided for selecting a file name (because the correct file name was unknown at planning time), use the output from the corresponding "scan_workspace_directory_for_gis_files" and "scan_external_directory_for_gis_files" tool to determine and substitute the appropriate file name.
 5. After executing all steps, provide the full plan, and a final summary indicating the the overall success or failure of the plan execution.
 6. Reason through your choices based on the results of the previous steps before making a decision when plan requires a decision on the tool parameters.
-7. DO NOT HALLUCINATE the tool calls in the summary, only include the tool calls that you used and the input parameters that you used.
-8. DO NOT HALLUCINATE the tool outputs in the summary, only include the tool outputs that you got.
+7. DO NOT HALLUCINATE the tool calls in the summary, only include the tool calls and the input parameters that you used.
+8. DO NOT HALLUCINATE the tool outputs in the summary, only use the actual tool outputs that you got for the summary.
 
 Output:
 - Should include relevant tool calls.
