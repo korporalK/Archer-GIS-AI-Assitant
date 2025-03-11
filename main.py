@@ -869,7 +869,8 @@ class GISAgent:
                     error_msg = f"Planning Error: {str(e)}"
                     print(error_msg)
                     self.response_queue.put(f"❌ {error_msg}\n")
-                    return error_msg
+                    self.response_queue.put(f"Archer:\n{error_msg}")
+                    return ""
                 
                 time.sleep(2)  # Brief pause before verification
 
@@ -926,7 +927,8 @@ class GISAgent:
                             max_iter_msg = "Maximum iterations reached. Planning failed."
                             print(max_iter_msg)
                             self.response_queue.put(f"❌ {max_iter_msg}\n")
-                            return max_iter_msg
+                            self.response_queue.put(f"Archer:\n{max_iter_msg}")
+                            return ""
                         
                         time.sleep(2)
                         continue  # Continue to next iteration
@@ -935,13 +937,15 @@ class GISAgent:
                     json_error = f"Verification JSON decode error: {str(e)}"
                     print(json_error)
                     self.response_queue.put(f"❌ {json_error}\n")
-                    return f"Invalid verification output format: {str(e)}"
+                    self.response_queue.put(f"Archer:\nInvalid verification output format: {str(e)}")
+                    return ""
             
             # Do not proceed to Execution Phase if the plan is invalid
             if validity.lower() != "valid":
                 invalid_plan_msg = "Plan is invalid after maximum iterations. Execution phase skipped."
                 self.response_queue.put(f"❌ {invalid_plan_msg}\n")
-                return invalid_plan_msg
+                self.response_queue.put(f"Archer:\n{invalid_plan_msg}")
+                return ""
             
             # Execution Phase
             print("\n3. EXECUTION PHASE")
@@ -999,9 +1003,6 @@ class GISAgent:
                     completed_tools = [step[0].tool for step in execution_result['intermediate_steps']]
                     print(f"Completed tool calls: {', '.join(completed_tools)}")
                 
-                print(f"Execution Result (Summary): {execution_result.get('output', '')}")
-                self.response_queue.put(f"Executor Output:\n{executor_output_cleaned}\n")
-                
                 # Enhanced display of completed tools
                 if 'intermediate_steps' in execution_result:
                     completed_tools = [step[0].tool for step in execution_result['intermediate_steps']]
@@ -1013,18 +1014,31 @@ class GISAgent:
                         print(f"{i:2d}. {tool_name}")
                     print("="*80)
                 
-                # Enhanced display of execution result
-                result_output = execution_result.get('output', '')
-                print("\n" + "="*80)
-                print("🏁 EXECUTION RESULT SUMMARY:")
-                print("="*80)
-                print(result_output)
-                print("="*80 + "\n")
-                
-                # Send output to the GUI
+                # First, send the execution output to show progress in the detailed tab
                 self.response_queue.put(f"Executor Output:\n{executor_output_cleaned}\n")
                 
-                return f"Execution completed:\n{result_output}"
+                # Format and display the execution result
+                result_output = execution_result.get('output', '')
+                result_display = "\n" + "="*80 + "\n"
+                result_display += "🏁 EXECUTION RESULT SUMMARY:\n"
+                result_display += "="*80 + "\n"
+                result_display += result_output + "\n"
+                result_display += "="*80 + "\n"
+                
+                # Send formatted result to the GUI
+                self.response_queue.put(result_display)
+                
+                # Ensure status is reset at the end of execution
+                self.response_queue.put("STATUS_RESET:Awaiting Query:🤖")
+                
+                # Create the Archer message
+                archer_message = f"Archer:\n{result_output}"
+                
+                # Add Archer message to the response queue
+                self.response_queue.put(archer_message)
+                
+                # Return nothing since we've already queued the message
+                return ""
             except Exception as exec_error:
                 executor_output = captured_output.getvalue()
                 executor_output_cleaned = self._remove_ansi_escape_codes(executor_output)
@@ -1047,12 +1061,22 @@ class GISAgent:
                 traceback_str = traceback.format_exc()
                 
                 self.response_queue.put(f"Executor Output:\n{executor_output_cleaned}\nExecution error:\n{error_details}\n")
-                return error_message
+                
+                # Create a properly formatted error message
+                error_message = f"Execution failed: {str(exec_error)}"
+                
+                # Ensure the error message reaches the chat tab
+                self.response_queue.put(f"Archer:\nError: {str(exec_error)}")
+                
+                # Return an empty string to avoid duplicating the message
+                return ""
             
         except Exception as e:
             print(f"\nERROR: {str(e)}")
             print("Traceback:", traceback.format_exc())
-            return f"Error processing request: {str(e)}"
+            # Queue the error message instead of returning it
+            self.response_queue.put(f"Archer:\nError processing request: {str(e)}")
+            return ""
     
     def _update_tree_with_results(self, scan_results):
         """Update the tree view with the scan results.
@@ -1219,7 +1243,7 @@ class GISGUI:
         self.response_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.response_area.config(state="disabled")
         self.response_area.tag_configure("user", foreground="#007acc", font=("Segoe UI", 10, "bold"))
-        self.response_area.tag_configure("agent", foreground="#228B22", font=("Segoe UI", 10))
+        self.response_area.tag_configure("agent", foreground="#990000", font=("Segoe UI", 10, "bold"))
         self.response_area.tag_configure("info", foreground="#888888", font=("Segoe UI", 9, "italic"))
         self.response_area.tag_configure("error", foreground="#cc0000", font=("Segoe UI", 10, "bold"))
         
@@ -1662,49 +1686,79 @@ class GISGUI:
             self.submit_button.config(style="TButton")
     
     def submit_request(self, event=None):
-        user_input = self.input_area.get("1.0", tk.END).strip()
-        if user_input and user_input != "Enter your GIS task here...":
-            # Update chat area with user query
-            self.update_response_area(f"You: {user_input}", "chat", "user")
-            
-            # Update detailed area with a header for the query
-            self.update_response_area("\n" + "="*80, "detail", "header")
-            self.update_response_area(f"📝 NEW QUERY: {user_input}", "detail", "header")
-            self.update_response_area("="*80 + "\n", "detail", "header")
-            
-            # Clear input area
-            self.input_area.delete("1.0", tk.END)
-            
-            # Update status
-            self.update_status("Processing your request...", "⏳")
-            
-            # Add the request to the queue for processing
-            self.request_queue.put(user_input)
-            
-            return "break"  # Prevents the default Return key behavior
+        """Submit a request to the GIS agent for processing."""
+        # Get the request text
+        request = self.input_area.get("1.0", tk.END).strip()
+        
+        # Skip empty requests
+        if not request and request != "Enter your GIS task here...":
+            return
+        
+        # Add the request to the chat area with user styling
+        self.update_response_area(f"You: {request}", "chat", "user")
+        
+        # Update detailed area with a header for the query
+        self.update_response_area("\n" + "="*80, "detail", "header")
+        self.update_response_area(f"📝 NEW QUERY: {request}", "detail", "header")
+        self.update_response_area("="*80 + "\n", "detail", "header")
+        
+        # Start the agent thread if it's not already running
+        self.start_agent_thread()
+        
+        # Clear the input area for the next request
+        self.input_area.delete("1.0", tk.END)
+        
+        # Update status
+        self.update_status("Processing your request...", "⏳")
+        
+        # Add the request to the queue for processing
+        self.request_queue.put(request)
+        
+        return "break"  # Prevents the default Return key behavior
     
     def update_response_area(self, message: str, area_type="chat", message_type="agent"):
-        """
-        Update the response areas with new messages.
+        """Update one of the response areas with a message.
         
         Args:
-            message (str): The message to display
-            area_type (str): 'chat' for main chat, 'detail' for detailed output
-            message_type (str): 'user', 'agent', 'info', 'planner', 'verifier', 'executor', 'tool', 'error', 'header'
+            message: The message to display.
+            area_type: 'chat' for the chat area, 'detail' for the technical details area.
+            message_type: 'user', 'agent', 'info', 'error', 'planner', 'verifier', 'executor', 'header'.
         """
+        # Properly identify Archer messages to ensure they're styled correctly
+        if message and isinstance(message, str) and message.startswith("Archer:"):
+            message_type = "agent"  # Force agent styling for Archer messages
+        
+        # Defer the update to the main thread
         def _update():
             # Update appropriate area based on type
-            if area_type == "chat":
-                self.response_area.config(state="normal")
-                self.response_area.insert(tk.END, message + "\n\n", message_type)
-                self.response_area.see(tk.END)
-                self.response_area.config(state="disabled")
-            elif area_type == "detail":
-                self.detailed_area.config(state="normal")
-                self.detailed_area.insert(tk.END, message + "\n", message_type)
-                self.detailed_area.see(tk.END)
-                self.detailed_area.config(state="disabled")
-        
+            target_area = self.response_area if area_type == "chat" else self.detailed_area
+
+            # Insert the message
+            target_area.config(state=tk.NORMAL)
+            
+            # Apply different formats based on message type
+            if message_type == "user":
+                target_area.insert(tk.END, message + "\n\n", "user")
+            elif message_type == "agent":
+                # Format agent messages with some styling
+                target_area.insert(tk.END, message + "\n\n", "agent")
+            elif message_type == "error":
+                target_area.insert(tk.END, message + "\n\n", "error")
+            elif message_type in ["planner", "verifier", "executor"]:
+                # Format different agent components with specific styling
+                target_area.insert(tk.END, message + "\n", message_type)
+            elif message_type == "header":
+                # Format headers with distinct styling
+                target_area.insert(tk.END, message + "\n", "header")
+            else:
+                # Default formatting for information messages
+                target_area.insert(tk.END, message + "\n", "info")
+            
+            # Scroll to the end
+            target_area.see(tk.END)
+            target_area.config(state=tk.DISABLED)
+            
+        # Schedule the update
         self.root.after(10, _update)
     
     def update_status(self, status, icon="🔄"):
@@ -1718,19 +1772,41 @@ class GISGUI:
     def process_responses(self):
         """Process responses from the agent and route them to the appropriate display areas."""
         try:
+            # Keep track of execution status to ensure messages appear in correct order
+            showing_execution = False
+            archer_message = None
+            execution_completed_shown = False
+            
+            # Process all messages in the queue
             while not self.gis_agent.response_queue.empty():
                 message = self.gis_agent.response_queue.get_nowait()
                 
-                # Filter out planning input and environment info - send only to detail tab
-                if ("Environment Info:" in message or 
-                    "Planning Input:" in message or 
-                    "Generated Plan:" in message or 
-                    "Verification Input:" in message or
-                    "Verification Result:" in message or
-                    "Verification Thought:" in message):
-                    # Send these only to detail tab
-                    self.update_response_area(message, "detail", "info")
-                    continue  # Skip further processing
+                # Allow through important planning and verification outputs, filter very verbose ones
+                if any(keyword in message for keyword in [
+                    "Environment Info:", "Verification Input:", "verification_json", 
+                    "THOUGHT:", "Raw plan", "Cleaned plan", "Parsed JSON:",
+                    "Maximum iterations reached", "Planning Input:", "Verification Thought:"
+                ]):
+                    # These are too verbose - don't show them
+                    continue
+                
+                # Show important planning outputs with better formatting
+                if message.startswith("Generated Plan:"):
+                    cleaned_message = message.replace("Generated Plan:", "GENERATED PLAN:")
+                    self.update_response_area(cleaned_message, "detail", "planner")
+                    continue
+                
+                # Show important planning outputs with better formatting
+                if message.startswith("Planning Input:"):
+                    cleaned_message = message.replace("Planning Input:", "PLANNING INPUT:")
+                    self.update_response_area(cleaned_message, "detail", "planner")
+                    continue
+                
+                # Show important verification outputs with better formatting
+                if message.startswith("Verification Result:"):
+                    cleaned_message = message.replace("Verification Result:", "VERIFICATION RESULT:")
+                    self.update_response_area(cleaned_message, "detail", "verifier")
+                    continue
                 
                 # Determine message type and target area based on content
                 if message.startswith("Planning..."):
@@ -1743,29 +1819,81 @@ class GISGUI:
                     self.update_response_area("Agent is verifying the plan...", "chat", "info")
                     self.update_response_area("\n--- VERIFICATION PHASE ---", "detail", "verifier")
                 
+                # Show important planning/verification outputs in detailed tab
+                elif "PLANNING PHASE" in message:
+                    self.update_response_area(message, "detail", "planner")
+                
+                elif "VERIFICATION PHASE" in message:
+                    self.update_response_area(message, "detail", "verifier")
+                    
+                elif "Plan verified" in message:
+                    self.update_response_area(message, "detail", "verifier")
+                    
+                elif "Validating step" in message or "validated successfully" in message:
+                    self.update_response_area(message, "detail", "verifier")
+                    
+                elif "Plan is invalid" in message or "Validity:" in message:
+                    self.update_response_area(message, "detail", "verifier")
+                
                 elif message.startswith("Executor Output:"):
+                    showing_execution = True
                     self.update_status("Executing plan...", "⚙️")
                     self.update_response_area("Agent is executing the plan...", "chat", "info")
                     formatted_message = message.replace("Executor Output:", "\n--- EXECUTION PHASE ---")
                     self.update_response_area(formatted_message, "detail", "executor")
                 
+                elif message.startswith("Archer:"):
+                    # Store Archer message to display after execution message if needed
+                    archer_message = message
+                    
+                    # Only display immediately if we've already shown the execution message
+                    if showing_execution:
+                        self.update_status("Awaiting Query", "🤖")  # Reset to awaiting status
+                        self.update_response_area(archer_message, "chat", "agent")
+                        
+                        # Only show the execution completed message once
+                        if not execution_completed_shown:
+                            self.update_response_area("\n--- EXECUTION COMPLETED ---", "detail", "executor")
+                            execution_completed_shown = True
+                        
+                        archer_message = None  # Reset the stored message
+                    
+                    # Otherwise wait to display it later in the correct order
+                
                 elif message.startswith("Execution completed:"):
-                    self.update_status("Awaiting Query", "🤖")  # Reset to awaiting status
-                    clean_message = message.replace("Execution completed:", "Result:")
-                    self.update_response_area(clean_message, "chat", "agent")
-                    self.update_response_area("\n--- EXECUTION COMPLETED ---", "detail", "executor")
+                    # Convert to Archer message and store to display in correct order
+                    archer_message = message.replace("Execution completed:", "Archer:")
+                    
+                    # Only display immediately if we've already shown the execution message
+                    if showing_execution:
+                        self.update_status("Awaiting Query", "🤖")  # Reset to awaiting status
+                        self.update_response_area(archer_message, "chat", "agent")
+                        
+                        # Only show the execution completed message once
+                        if not execution_completed_shown:
+                            self.update_response_area("\n--- EXECUTION COMPLETED ---", "detail", "executor")
+                            execution_completed_shown = True
+                        
+                        archer_message = None  # Reset the stored message
+                    
+                    # Otherwise wait to display it later in the correct order
+                
+                elif message.startswith("🏁 EXECUTION RESULT SUMMARY:"):
+                    # This is just for the detailed tab, not the chat tab
+                    self.update_response_area(message, "detail", "executor")
                 
                 elif message.startswith("Execution failed:") or "error" in message.lower():
                     self.update_status("Error occurred", "❌")
                     clean_message = message.replace("Execution failed:", "Error:")
-                    self.update_response_area(clean_message, "chat", "error")
+                    # Error messages are now handled directly in agent_worker for chat tab
                     self.update_response_area("\n--- EXECUTION ERROR ---\n" + message, "detail", "error")
                 
-                elif message.startswith("--- Iteration"):
-                    self.update_response_area(message, "detail", "header")
-                
                 # Route directory scanning and initialization messages to Technical Details tab
-                elif any(keyword in message for keyword in ["Scanning directory", "Scan complete", "Found", "Successfully processed", "Directory scanning", "Performing initial scan"]):
+                elif any(keyword in message for keyword in [
+                    "Scanning directory", "Scan complete", "Found", 
+                    "Successfully processed", "Directory scanning", 
+                    "Performing initial scan", "COMPLETED TOOLS"
+                ]):
                     self.update_response_area(message, "detail", "info")
                     # Optionally update status
                     if "initial scan" in message:
@@ -1773,9 +1901,33 @@ class GISGUI:
                     elif "completed" in message:
                         self.update_status("Ready", "✅")
                 
+                # Handle special status reset message
+                elif message.startswith("STATUS_RESET:"):
+                    # Format: STATUS_RESET:Status Text:Emoji
+                    parts = message.split(":", 2)
+                    if len(parts) >= 3:
+                        status_text = parts[1]
+                        emoji = parts[2]
+                        self.update_status(status_text, emoji)
+                
                 else:
                     # Default to detailed area for any other messages
                     self.update_response_area(message, "detail", "info")
+            
+            # If we have an Archer message but haven't displayed the execution message yet,
+            # we need to ensure the execution message appears first
+            if archer_message and not showing_execution:
+                self.update_status("Executing plan...", "⚙️")
+                self.update_response_area("Agent is executing the plan...", "chat", "info")
+                
+                # Then display the Archer message
+                self.update_status("Awaiting Query", "🤖")
+                self.update_response_area(archer_message, "chat", "agent")
+                
+                # Only show the execution completed message once
+                if not execution_completed_shown:
+                    self.update_response_area("\n--- EXECUTION COMPLETED ---", "detail", "executor")
+                    execution_completed_shown = True
                 
         except Exception as e:
             print(f"Error processing responses: {str(e)}")
@@ -1796,12 +1948,17 @@ class GISGUI:
                         break
                     
                     try:
+                        # Get the result from the agent
                         result = self.gis_agent.process_request(request)
-                        self.response_queue.put(result)
+                        
+                        # The process_request method already adds the Archer message to the queue
+                        # We don't need to do anything else here to avoid duplication
+                        
                     except Exception as e:
                         error_msg = f"Error processing request: {str(e)}"
                         print(error_msg)
                         self.response_queue.put(error_msg)
+                        self.update_response_area(error_msg, "chat", "error")
                     finally:
                         self.request_queue.task_done()
             
