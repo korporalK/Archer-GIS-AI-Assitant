@@ -354,6 +354,8 @@ GIS tasks often include:
 - Importing or converting data (e.g., importing external files into the workspace)
 - Geoprocessing operations such as buffering, overlay analysis, reprojecting, clipping, and attribute querying
 - Ensuring that required fields exist and that numeric, string, and date attributes are correctly formatted
+- When saving the output, ensure that if the output is saved inside the geodatabase then you don't need to specify the extension of the file in the output name.
+- Always use the correct file name and extension when saving the output outside the geodatabase.
 - Verifying that any index or analysis formula (e.g., NDVI, MNDWI) is appropriate for the user's request
 - Handling cases where the file name or attribute field is unknown by using dedicated scanning or listing tools (e.g., "list_fields", "scan_workspace_directory_for_gis_files", "scan_external_directory_for_gis_files")
 
@@ -410,7 +412,8 @@ Missing Parameters: If any required parameter is unclear or missing, do not gues
 6. **Avoid Redundancies:** If a required file or attribute is already available (from inventory or external files), do not plan unnecessary scanning or download steps unless explicitly requested.
 
 [Output]
-Output ONLY the JSON array representing the plan.
+Output ONLY the JSON array representing the plan. 
+NEVER describe your plan or any thought in the ouput except only the plan.
 
 Example Format (do not include markdown or extra text):
 [
@@ -529,9 +532,9 @@ You are a GIS task executor with the ability to execute multiple tools in sequen
    - After completing a tool call, IMMEDIATELY CONTINUE to the next step without waiting for further instructions
    - DO NOT STOP after the first tool call - you must keep going until ALL steps are complete
 
-3. When handling field values and string comparisons:
-   - Make string comparisons case-insensitive by using UPPER() for SQL WHERE clauses
+3. When handling field values:
    - Use exact field names as returned by list_fields tools
+   - Consider the data type of the field when writing the condition for the where clause
 
 4. CRITICALLY IMPORTANT: After each tool call, you MUST CONTINUE to the next step in the plan. Do not wait for confirmation to proceed.
 

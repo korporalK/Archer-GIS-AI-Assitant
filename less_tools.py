@@ -1,7 +1,7 @@
 from langchain.tools import tool
 import arcpy
 import os
-from typing import List, Dict, Any, Union, Optional
+from typing import List, Dict, Any, Literal, Union, Optional
 import json
 import time
 import aiohttp
@@ -334,7 +334,8 @@ def calculate_field(in_table: str, field_name: str, expression: str, expression_
 
 @tool
 def select_features(input_features: str, output_features: str, where_clause: str) -> str:
-    """Selects features by attribute and saves them to a new feature class. Use the field name not the alias name to make the query.
+    """Selects features by attribute and saves them to a new feature class. Uses case-insensitive comparisons for string fields.
+    Use the field name not the alias name to make the query.
 
     Args:
         input_features: The path to the input feature class.
@@ -342,58 +343,50 @@ def select_features(input_features: str, output_features: str, where_clause: str
         where_clause: The SQL WHERE clause to select features.
     """
     try:
-        if not _feature_class_exists(input_features):
+        if not arcpy.Exists(input_features):
             return f"Error: Input feature class '{input_features}' does not exist."
-        
-        # Try to make case-insensitive adjustments to where_clause
-        # This is a best effort and might not cover all SQL cases
+
         modified_clause = where_clause
-        
-        # For simple cases with quoted strings, try to make comparisons case-insensitive
-        import re
-        
-        # Pattern for field = value comparisons with single quotes: fieldname = 'value'
-        single_quote_pattern = r"(\w+)\s*=\s*'([^']+)'"
-        # Pattern for field = value comparisons with double quotes: fieldname = "value"
-        double_quote_pattern = r'(\w+)\s*=\s*"([^"]+)"'
-        
-        # Process string comparisons with single quotes
-        matches = re.findall(single_quote_pattern, where_clause)
-        if matches:
-            for field, value in matches:
-                # Make string comparisons case insensitive using UPPER function
-                old_comparison = f"{field} = '{value}'"
-                new_comparison = f"UPPER({field}) = UPPER('{value}')"
-                modified_clause = modified_clause.replace(old_comparison, new_comparison)
-        
-        # Process string comparisons with double quotes
-        matches = re.findall(double_quote_pattern, where_clause)
-        if matches:
-            for field, value in matches:
-                old_comparison = f'{field} = "{value}"'
-                new_comparison = f'UPPER({field}) = UPPER("{value}")'
-                modified_clause = modified_clause.replace(old_comparison, new_comparison)
-        
-        # If we modified the clause, log it
+
+        # Helper to get field type
+        def get_field_type(field_name):
+            fields = arcpy.ListFields(input_features, field_name)
+            return fields[0].type if fields else None
+
+        # Patterns to find field = 'value' or field = "value" with any operator
+        patterns = [
+            r"(\w+)\s*(=|\bLIKE\b)\s*'([^']*)'",  # Single quotes
+            r'(\w+)\s*(=|\bLIKE\b)\s*"([^"]*)"'   # Double quotes
+        ]
+
+        for pattern in patterns:
+            matches = re.findall(pattern, modified_clause, flags=re.IGNORECASE)
+            for match in matches:
+                field, operator, value = match
+                field_type = get_field_type(field)
+                if field_type == 'String':
+                    # Apply UPPER() to make comparison case-insensitive
+                    old = f"{field} {operator} '{value}'" if "'" in pattern else f'{field} {operator} "{value}"'
+                    new = f"UPPER({field}) {operator} UPPER('{value}')" if "'" in pattern else f'UPPER({field}) {operator} UPPER("{value}")'
+                    modified_clause = modified_clause.replace(old, new)
+                    print(f"Adjusted clause for string field '{field}': {old} -> {new}")
+
+        # Execute Select with modified clause
         if modified_clause != where_clause:
-            print(f"Modified where clause from '{where_clause}' to '{modified_clause}' for case insensitivity")
-        
-        # Use the modified clause if available, otherwise use the original
+            print(f"Modified WHERE clause to: {modified_clause}")
+
         arcpy.analysis.Select(input_features, output_features, modified_clause)
-        return f"Successfully selected features from '{input_features}' to '{output_features}'."
+        return f"Successfully created '{output_features}' using case-insensitive WHERE clause."
+    
     except arcpy.ExecuteError:
-        # If the modified clause failed, try with the original clause
-        if modified_clause != where_clause:
-            try:
-                print(f"Modified clause failed, trying original: {where_clause}")
-                arcpy.analysis.Select(input_features, output_features, where_clause)
-                return f"Successfully selected features from '{input_features}' to '{output_features}' using original clause."
-            except:
-                return f"Error selecting features: {arcpy.GetMessages()}"
-        else:
-            return f"Error selecting features: {arcpy.GetMessages()}"
+        # Fallback to original clause if modified fails
+        try:
+            arcpy.analysis.Select(input_features, output_features, where_clause)
+            return f"Successfully created '{output_features}' using original WHERE clause."
+        except:
+            return f"Error: {arcpy.GetMessages(2)}"
     except Exception as e:
-        return f"An unexpected error occurred: {str(e)}"
+        return f"Unexpected error: {str(e)}"
 
 @tool
 def project_features(input_features: str, output_features: str, out_coor_system: str) -> str:
@@ -516,36 +509,182 @@ def spatial_join(target_features: str, join_features: str, output_features: str,
     except Exception as e:
         return f"An unexpected error occurred: {str(e)}"
 
+
 @tool
-def zonal_statistics(in_zone_data: str, zone_field: str, in_value_raster: str, out_table: str,
-                    statistics_type: str = "MEAN") -> str:
-    """Calculates zonal statistics for each zone in a zone dataset.
+def zonal_statistics_as_table(
+    in_zone_data: str,
+    zone_field: str,
+    in_value_raster: str,
+    out_table: str,
+    statistics_type: Union[str, List[str]] = "MEAN",
+    ignore_nodata: Literal['DATA', 'NODATA', '#'] | None = "#",
+    process_as_multidimensional: Literal['CURRENT_SLICE', 'ALL_SLICES', '#'] | None = "#",
+    percentile_values: str = "#",
+    percentile_interpolation_type: Literal['AUTO_DETECT', 'NEAREST', 'LINEAR', '#'] | None = "#",
+    circular_calculation: Literal['ARITHMETIC', 'CIRCULAR', '#'] | None = "#",
+    circular_wrap_value: str = "#",
+    out_join_layer: str = "#"
+) -> str:
+    """
+    A robust wrapper for arcpy.sa.ZonalStatisticsAsTable that supports either a single statistic,
+    "ALL", or a list of specific statistics, merging the results into a single output table.
 
     Args:
-        in_zone_data: The path to the input zone dataset (feature class or raster).
-        zone_field: The field defining the zones.
-        in_value_raster: The path to the input value raster.
-        out_table: The path to the output table.
-        statistics_type: The statistic to calculate (e.g., "MEAN", "SUM", "MINIMUM", "MAXIMUM").
+        in_zone_data (str): Dataset defining zones (feature class or raster).
+        zone_field (str): Field in the zone dataset defining zones.
+        in_value_raster (str): Raster for which statistics are calculated.
+        out_table (str): Output table path.
+        statistics_type (str or List[str]): Statistic(s) to calculate. Valid options are:
+                                             ("ALL", "MEAN", "MAJORITY", "MAJORITY_COUNT", "MAJORITY_PERCENT", "MAXIMUM", "MEDIAN",
+                                             "MINIMUM", "MINORITY", "MINORITY_COUNT", "MINORITY_PERCENT", "PERCENTILE", "RANGE", "STD",
+                                             "SUM", "VARIETY", "MIN_MAX", "MEAN_STD", "MIN_MAX_MEAN", "MAJORITY_VALUE_COUNT_PERCENT",
+                                             "MINORITY_VALUE_COUNT_PERCENT")
+        ignore_nodata (str): 'DATA', 'NODATA', or '#' (default).
+        process_as_multidimensional (str): 'CURRENT_SLICE', 'ALL_SLICES', or '#' (default).
+        percentile_values (str): Percentile value(s) if statistics_type is 'PERCENTILE' (default "#").
+        percentile_interpolation_type (str): 'AUTO_DETECT', 'NEAREST', 'LINEAR', or '#' (default).
+        circular_calculation (str): 'ARITHMETIC', 'CIRCULAR', or '#' (default).
+        circular_wrap_value (str): Wrap value for circular calculations (default "#").
+        out_join_layer (str): Optional output join layer (default "#").
+
+    Returns:
+        str: Success message if the tool runs successfully, or an error message.
     """
     try:
+        # Validate input datasets and zone field.
         if not _dataset_exists(in_zone_data):
             return f"Error: Input zone dataset '{in_zone_data}' does not exist."
         if not _dataset_exists(in_value_raster):
             return f"Error: Input value raster '{in_value_raster}' does not exist."
         if not _is_valid_field_name(in_zone_data, zone_field):
-            return f"Error: Zone field is not a valid field"
-
-        valid_stats = ["MEAN", "SUM", "MINIMUM", "MAXIMUM", "RANGE", "STD", "VARIETY", "MAJORITY", "MINORITY", "MEDIAN"]
-        if statistics_type.upper() not in valid_stats:
-            return f"Error: Invalid statistics_type. Must be one of: {', '.join(valid_stats)}"
-
-        arcpy.sa.ZonalStatisticsAsTable(in_zone_data, zone_field, in_value_raster, out_table, statistics_type=statistics_type.upper())
-        return f"Successfully calculated zonal statistics to '{out_table}'."
+            return f"Error: Zone field '{zone_field}' is not valid for dataset '{in_zone_data}'."
+        
+        # Define valid statistics.
+        valid_stats = [
+            "ALL", "MEAN", "MAJORITY", "MAJORITY_COUNT", "MAJORITY_PERCENT", "MAXIMUM", "MEDIAN",
+            "MINIMUM", "MINORITY", "MINORITY_COUNT", "MINORITY_PERCENT", "PERCENTILE", "RANGE", "STD",
+            "SUM", "VARIETY", "MIN_MAX", "MEAN_STD", "MIN_MAX_MEAN", "MAJORITY_VALUE_COUNT_PERCENT",
+            "MINORITY_VALUE_COUNT_PERCENT"
+        ]
+        
+        # Convert statistics_type to a list.
+        if isinstance(statistics_type, str):
+            statistics_list = [statistics_type.upper()]
+        elif isinstance(statistics_type, list):
+            statistics_list = [stat.upper() for stat in statistics_type]
+        else:
+            return "Error: statistics_type must be a string or a list of strings."
+        
+        # Validate each statistic.
+        for stat in statistics_list:
+            if stat not in valid_stats:
+                return f"Error: Invalid statistic '{stat}'. Valid options are: {', '.join(valid_stats)}"
+        
+        # If "ALL" is specified (either as the only item or in a list), call the tool directly.
+        if statistics_list == ["ALL"]:
+            arcpy.sa.ZonalStatisticsAsTable(
+                in_zone_data,
+                zone_field,
+                in_value_raster,
+                out_table,
+                ignore_nodata,
+                "ALL",
+                process_as_multidimensional,
+                percentile_values,
+                percentile_interpolation_type,
+                circular_calculation,
+                circular_wrap_value,
+                out_join_layer
+            )
+            return f"Successfully calculated zonal statistics (ALL) to '{out_table}'."
+        
+        # If only one statistic is requested, call the tool directly.
+        if len(statistics_list) == 1:
+            arcpy.sa.ZonalStatisticsAsTable(
+                in_zone_data,
+                zone_field,
+                in_value_raster,
+                out_table,
+                ignore_nodata,
+                statistics_list[0],
+                process_as_multidimensional,
+                percentile_values,
+                percentile_interpolation_type,
+                circular_calculation,
+                circular_wrap_value,
+                out_join_layer
+            )
+            return f"Successfully calculated zonal statistics ({statistics_list[0]}) to '{out_table}'."
+        
+        # For multiple statistics, process each statistic separately and merge results.
+        temp_tables = []
+        for stat in statistics_list:
+            temp_table = f"in_memory/temp_{stat.lower()}"
+            arcpy.sa.ZonalStatisticsAsTable(
+                in_zone_data,
+                zone_field,
+                in_value_raster,
+                temp_table,
+                ignore_nodata,
+                stat,
+                process_as_multidimensional,
+                percentile_values,
+                percentile_interpolation_type,
+                circular_calculation,
+                circular_wrap_value,
+                out_join_layer
+            )
+            temp_tables.append((temp_table, stat))
+        
+        # Copy the first temporary table to the final output.
+        arcpy.management.CopyRows(temp_tables[0][0], out_table)
+        
+        # Join additional statistic fields from remaining temporary tables.
+        for temp_table, stat in temp_tables[1:]:
+            # Assume the field in each temp table is named exactly as the statistic.
+            arcpy.management.JoinField(out_table, zone_field, temp_table, zone_field, [stat])
+        
+        # Clean up temporary tables.
+        for temp_table, _ in temp_tables:
+            arcpy.management.Delete(temp_table)
+        
+        return f"Successfully calculated zonal statistics {statistics_list} and merged results into '{out_table}'."
+    
     except arcpy.ExecuteError:
-        return f"Error calculating zonal statistics: {arcpy.GetMessages()}"
+        return f"Error executing tool: {arcpy.GetMessages()}"
     except Exception as e:
         return f"An unexpected error occurred: {str(e)}"
+
+# @tool
+# def zonal_statistics(in_zone_data: str, zone_field: str, in_value_raster: str, out_table: str,
+#                     statistics_type: str = "MEAN") -> str:
+#     """Calculates zonal statistics for each zone in a zone dataset.
+
+#     Args:
+#         in_zone_data: The path to the input zone dataset (feature class or raster).
+#         zone_field: The field defining the zones.
+#         in_value_raster: The path to the input value raster.
+#         out_table: The path to the output table.
+#         statistics_type: The statistic to calculate (e.g., "MEAN", "SUM", "MINIMUM", "MAXIMUM").
+#     """
+#     try:
+#         if not _dataset_exists(in_zone_data):
+#             return f"Error: Input zone dataset '{in_zone_data}' does not exist."
+#         if not _dataset_exists(in_value_raster):
+#             return f"Error: Input value raster '{in_value_raster}' does not exist."
+#         if not _is_valid_field_name(in_zone_data, zone_field):
+#             return f"Error: Zone field is not a valid field"
+
+#         valid_stats = ["MEAN", "SUM", "MINIMUM", "MAXIMUM", "RANGE", "STD", "VARIETY", "MAJORITY", "MINORITY", "MEDIAN"]
+#         if statistics_type.upper() not in valid_stats:
+#             return f"Error: Invalid statistics_type. Must be one of: {', '.join(valid_stats)}"
+
+#         arcpy.sa.ZonalStatisticsAsTable(in_zone_data, zone_field, in_value_raster, out_table, statistics_type=statistics_type.upper())
+#         return f"Successfully calculated zonal statistics to '{out_table}'."
+#     except arcpy.ExecuteError:
+#         return f"Error calculating zonal statistics: {arcpy.GetMessages()}"
+#     except Exception as e:
+#         return f"An unexpected error occurred: {str(e)}"
 
 @tool
 def extract_by_mask(in_raster: str, in_mask_data: str, out_raster: str) -> str:
@@ -1518,5 +1657,5 @@ __all__ = [
     'list_fields','merge_features','project_features',
     'raster_calculator','reclassify_raster',
     'select_features','slope', 'spatial_join',
-    'union_features','zonal_statistics', 'scan_external_directory_for_gis_files'
+    'union_features','zonal_statistics_as_table', 'scan_external_directory_for_gis_files'
 ]
