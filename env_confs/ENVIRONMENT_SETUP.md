@@ -103,6 +103,9 @@ If you prefer not to create a separate environment:
 2. Navigate to the env_confs directory
 3. Build the arcgis conda environment:
    ```
+   conda config --add channels esri
+   conda config --add channels conda-forge
+   conda config --set channel_priority strict
    conda env create -f environment_full.yml
    ```
 4. Add the Environment to ArcGIS Pro: To use the new environment within ArcGIS Pro:
