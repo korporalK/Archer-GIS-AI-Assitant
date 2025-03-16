@@ -399,6 +399,7 @@ Missing Parameters: If any required parameter is unclear or missing, do not gues
    - Verify the availability of Landsat data in the workspace or external files.
    - Check if the required Landsat data is already available in the workspace or external files.
    - If the required Landsat data is not available, plan a step to download the data using the appropriate tool.
+   - Landsat Images are in 16-bit when downloaded we need to rescale it to either reflectance or radiance before doing any other processing. Use appropriate rescale factor.
 3. **Plan Geoprocessing Steps:** Identify necessary steps such as:
    - Importing external files (if required) using the appropriate tool.
    - Converting file formats or reprojecting data to a common spatial reference.
@@ -495,6 +496,7 @@ For each step in the plan, perform the following checks:
 - Identify any mistakes, including assumptions or hallucinations where the plan does not verify required inputs.
 - Ask if the field names are being assumed in the plan, if so, ask for the list of fields and their names to be added in the plan.
 - Ask if the satellite data already exists in the workspace or the external files, if so, ask for it to be used instead of downloading it again.
+- Landsat Images are in 16-bit when downloaded we need to rescale it to either reflectance or radiance before doing any other processing. Use appropriate rescale factor. Ask if images have been rescaled appropriately.
 
 [Output Format]
 After completing your reasoning, output a JSON object with exactly two keys:

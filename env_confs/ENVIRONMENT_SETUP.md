@@ -97,6 +97,22 @@ If you prefer not to create a separate environment:
 
 **Note**: This approach may modify your ArcGIS Pro Python environment, which could potentially affect other ArcGIS Pro functionality.
 
+### Option 4: Rebuilding outside of ArcGIS
+
+1. Open ArcGIS Python Command Prompt
+2. Navigate to the env_confs directory
+3. Build the arcgis conda environment:
+   ```
+   conda env create -f environment_full.yml
+   ```
+4. Add the Environment to ArcGIS Pro: To use the new environment within ArcGIS Pro:
+   - Open ArcGIS Pro.
+   - Navigate to Project > Python > Manage Environments.
+   - Click Add and browse to the location of the new environment.
+   
+**Note**: I am have not tested building the environment on my end, I advise you to first try the environment_full, if you get into issues then try environment_nobuild and environment_history.
+
+
 ## Troubleshooting Environment Issues
 
 ### Common Issues and Solutions
